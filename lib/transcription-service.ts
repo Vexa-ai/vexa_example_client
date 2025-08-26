@@ -124,8 +124,10 @@ const mockSegments: TranscriptionSegment[] = [
 // Mock data storage
 const mockTranscriptionData: Record<string, TranscriptionData> = {}
 
-// Vexa API configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_VEXA_API_URL || "https://gateway.dev.vexa.ai"
+// Vexa API configuration - get URL dynamically from cookies, env, or default
+function getApiBaseUrl(): string {
+  return getApiUrl();
+}
 
 // Helper function to handle API responses
 async function handleApiResponse<T>(response: Response): Promise<T> {
@@ -203,6 +205,73 @@ export function clearApiKey(): void {
   }
 }
 
+// Function to get the API URL from cookies
+export function getApiUrl(): string {
+  try {
+    // Only attempt to get from cookies on client side
+    if (typeof window !== 'undefined') {
+      // Direct approach to get a specific cookie
+      const match = document.cookie.match(/(^|;)\s*vexa_api_url\s*=\s*([^;]+)/);
+      const cookieValue = match ? decodeURIComponent(match[2]) : '';
+
+      if (cookieValue) {
+        console.log("Found API URL in cookies:", cookieValue);
+        return cookieValue;
+      }
+    }
+
+    // If we couldn't get from cookies, try environment variable
+    const envUrl = process.env.NEXT_PUBLIC_VEXA_API_URL || '';
+    if (envUrl) {
+      console.log("Using API URL from environment:", envUrl);
+      return envUrl;
+    }
+
+    // Final fallback to default URL
+    const defaultUrl = "https://api.cloud.vexa.ai";
+    console.log("Using default API URL:", defaultUrl);
+    return defaultUrl;
+  } catch (error) {
+    console.error("Error getting API URL:", error);
+    return "https://api.cloud.vexa.ai";
+  }
+}
+
+// Function to set the API URL in cookies
+export function setApiUrl(url: string): void {
+  try {
+    if (typeof window !== 'undefined') {
+      // Set a cookie that expires in 30 days
+      const days = 30;
+      const date = new Date();
+      date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+
+      // Simplified cookie setting with no spaces
+      document.cookie = `vexa_api_url=${encodeURIComponent(url)};expires=${date.toUTCString()};path=/`;
+
+      // Immediately verify the cookie was set
+      setTimeout(() => {
+        const isSet = document.cookie.includes('vexa_api_url=');
+        console.log(`API URL cookie set: ${isSet}`);
+      }, 10);
+    }
+  } catch (error) {
+    console.error("Error setting API URL:", error);
+  }
+}
+
+// Function to clear the API URL from cookies
+export function clearApiUrl(): void {
+  try {
+    if (typeof window !== 'undefined') {
+      document.cookie = 'vexa_api_url=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+      console.log("API URL cookie cleared");
+    }
+  } catch (error) {
+    console.error("Error clearing API URL:", error);
+  }
+}
+
 // Function to get headers with Vexa API key - with extra logging
 function getHeaders() {
   // Get the API key
@@ -273,7 +342,7 @@ export async function startTranscription(
       language: language === "auto" ? null : language,
     }
 
-    const response = await fetch(`${API_BASE_URL}/bots`, {
+    const response = await fetch(`${getApiBaseUrl()}/bots`, {
       method: "POST",
       headers: getHeaders(),
       body: JSON.stringify(requestPayload),
@@ -321,7 +390,7 @@ export async function stopTranscription(meetingId: string): Promise<{ success: b
     const platform = parts[0];
     const nativeMeetingId = parts[1];
 
-    const response = await fetch(`${API_BASE_URL}/bots/${platform}/${nativeMeetingId}`, {
+    const response = await fetch(`${getApiBaseUrl()}/bots/${platform}/${nativeMeetingId}`, {
       method: "DELETE",
       headers: getHeaders(),
     })
@@ -368,7 +437,7 @@ export async function updateTranscriptionLanguage(meetingId: string, language: s
     const platform = parts[0];
     const nativeMeetingId = parts[1];
 
-    const updateConfigUrl = `${API_BASE_URL}/bots/${platform}/${nativeMeetingId}/config`;
+    const updateConfigUrl = `${getApiBaseUrl()}/bots/${platform}/${nativeMeetingId}/config`;
     const updatePayload = {
       language: language === "auto" ? null : language
     };
@@ -441,7 +510,7 @@ export async function getTranscription(meetingId: string): Promise<Transcription
     
     console.log(`Fetching transcript for platform=${platform}, nativeMeetingId=${nativeMeetingId}`);
 
-    const response = await fetch(`${API_BASE_URL}/transcripts/${platform}/${nativeMeetingId}`, {
+    const response = await fetch(`${getApiBaseUrl()}/transcripts/${platform}/${nativeMeetingId}`, {
       method: "GET",
       headers: getHeaders(),
     })
@@ -564,7 +633,7 @@ export async function getMeetingHistory(): Promise<Meeting[]> {
 
   // Real API implementation using Vexa API
   try {
-    const response = await fetch(`${API_BASE_URL}/meetings`, {
+    const response = await fetch(`${getApiBaseUrl()}/meetings`, {
       method: "GET",
       headers: getHeaders(),
     })
@@ -664,7 +733,7 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
     }
 
     console.log(`Fetching transcript for platform=${platform}, nativeMeetingId=${nativeMeetingId}`);
-    const response = await fetch(`${API_BASE_URL}/transcripts/${platform}/${nativeMeetingId}`, {
+    const response = await fetch(`${getApiBaseUrl()}/transcripts/${platform}/${nativeMeetingId}`, {
       method: "GET",
       headers: getHeaders(),
     })
@@ -770,7 +839,7 @@ export async function updateMeetingData(
     const platform = parts[0];
     const nativeMeetingId = parts[1];
 
-    const response = await fetch(`${API_BASE_URL}/meetings/${platform}/${nativeMeetingId}`, {
+    const response = await fetch(`${getApiBaseUrl()}/meetings/${platform}/${nativeMeetingId}`, {
       method: "PATCH",
       headers: getHeaders(),
       body: JSON.stringify({ data })
@@ -816,7 +885,7 @@ export async function deleteMeeting(meetingId: string): Promise<{ success: boole
     const platform = parts[0];
     const nativeMeetingId = parts[1];
 
-    const response = await fetch(`${API_BASE_URL}/meetings/${platform}/${nativeMeetingId}`, {
+    const response = await fetch(`${getApiBaseUrl()}/meetings/${platform}/${nativeMeetingId}`, {
       method: "DELETE",
       headers: getHeaders()
     })
