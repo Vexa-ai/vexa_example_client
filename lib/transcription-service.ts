@@ -447,6 +447,8 @@ export async function stopTranscription(meetingId: string): Promise<{ success: b
     
     const platform = parts[0];
     const nativeMeetingId = parts[1];
+    const internalIdForCurrent = parts.length >= 3 ? parts[2] : null
+    // internal meeting id not required for stop endpoint; ignore third part here
 
     const response = await fetch(`${getApiBaseUrl()}/bots/${platform}/${nativeMeetingId}`, {
       method: "DELETE",
@@ -565,10 +567,12 @@ export async function getTranscription(meetingId: string): Promise<Transcription
     
     const platform = parts[0];
     const nativeMeetingId = parts[1];
+    const internalIdForCurrent = parts.length >= 3 ? parts[2] : null
     
-    console.log(`Fetching transcript for platform=${platform}, nativeMeetingId=${nativeMeetingId}`);
+    console.log(`Fetching transcript for platform=${platform}, nativeMeetingId=${nativeMeetingId}${internalIdForCurrent ? `, meeting_id=${internalIdForCurrent}` : ''}`);
 
-    const response = await fetch(`${getApiBaseUrl()}/transcripts/${platform}/${nativeMeetingId}`, {
+    const transcriptUrl = `${getApiBaseUrl()}/transcripts/${platform}/${nativeMeetingId}` + (internalIdForCurrent ? `?meeting_id=${encodeURIComponent(internalIdForCurrent)}` : '')
+    const response = await fetch(transcriptUrl, {
       method: "GET",
       headers: getHeaders(),
     })
@@ -790,8 +794,11 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
       throw new Error("Invalid meeting ID format")
     }
 
-    console.log(`Fetching transcript for platform=${platform}, nativeMeetingId=${nativeMeetingId}`);
-    const response = await fetch(`${getApiBaseUrl()}/transcripts/${platform}/${nativeMeetingId}`, {
+    const partsHist = meetingId.split('/')
+    const internalIdForHistory = partsHist.length >= 3 ? partsHist[2] : null
+    console.log(`Fetching transcript for platform=${platform}, nativeMeetingId=${nativeMeetingId}${internalIdForHistory ? `, meeting_id=${internalIdForHistory}` : ''}`);
+    const transcriptUrlHistory = `${getApiBaseUrl()}/transcripts/${platform}/${nativeMeetingId}` + (internalIdForHistory ? `?meeting_id=${encodeURIComponent(internalIdForHistory)}` : '')
+    const response = await fetch(transcriptUrlHistory, {
       method: "GET",
       headers: getHeaders(),
     })

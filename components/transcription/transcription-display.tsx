@@ -554,14 +554,17 @@ export function TranscriptionDisplay({
         try {
           setIsLoading(true)
 
-          // Subscribe by native meeting id (platform/native_id) to mirror script
+          // Prefer internal meeting id when present: platform/native_id/internalId
           const parts = meetingId.split('/')
           const platform = parts[0] || 'google_meet'
           const nativeId = parts[1] || meetingId
+          const internalId = parts.length >= 3 ? Number(parts[2]) : null
 
-          // Start WS – subscribe immediately upon request
+          // Start WS – subscribe using internal id if present, else platform/native
           await startWebSocketTranscription(
-            { platform, native_id: nativeId } as any,
+            internalId != null && !Number.isNaN(internalId)
+              ? internalId
+              : ({ platform, native_id: nativeId } as any),
             handleWebSocketTranscriptMutable,
             handleWebSocketTranscriptFinalized,
             handleWebSocketMeetingStatus,
@@ -569,9 +572,11 @@ export function TranscriptionDisplay({
             handleWebSocketConnected,
             handleWebSocketDisconnected
           )
-          internalMeetingId.current = `${platform}/${nativeId}`
+          internalMeetingId.current = internalId != null && !Number.isNaN(internalId)
+            ? internalId
+            : `${platform}/${nativeId}`
 
-          console.log("🟢 [WEBSOCKET] Subscribed to meeting immediately upon request:", `${platform}/${nativeId}`)
+          console.log("🟢 [WEBSOCKET] Subscribed:", internalMeetingId.current)
         } catch (err) {
           console.error("Error initializing websocket:", err)
           setError("Failed to start WebSocket")
@@ -723,28 +728,6 @@ export function TranscriptionDisplay({
             </>
           )}
 
-          {/* Debug info - temporarily visible */}
-          <div className="text-xs text-gray-500 ml-2">
-            Status: {meetingStatus || 'none'} | WS: {isWebSocketConnected ? 'connected' : 'disconnected'}
-          </div>
-
-          {/* Test button to manually trigger WebSocket callback */}
-          <button
-            onClick={() => {
-              console.log("🧪 [TEST] Manually triggering WebSocket callback");
-              const testSegments: TranscriptionSegment[] = [{
-                id: `test-${Date.now()}`,
-                text: "Test WebSocket segment - UI rendering test!",
-                timestamp: new Date().toISOString(),
-                speaker: "Test Speaker",
-                language: "en"
-              }];
-              handleWebSocketTranscriptMutable(testSegments);
-            }}
-            className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600 ml-2"
-          >
-            Test WS
-          </button>
         </div>
         <div className="flex items-center gap-1">
           {isLive && (
