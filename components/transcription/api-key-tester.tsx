@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { getApiKey } from "@/lib/transcription-service"
+import { getApiKey, getApiBaseUrl } from "@/lib/transcription-service"
 import { AlertCircle, CheckCircle2 } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
@@ -27,8 +27,10 @@ export function ApiKeyTester() {
         return
       }
       
-      // Use the Vexa API base URL
-      const apiUrl = process.env.NEXT_PUBLIC_VEXA_API_URL || "https://gateway.dev.vexa.ai"
+      // Use the configurable API base URL
+      const apiUrl = getApiBaseUrl()
+      
+      console.log("Testing API key against:", apiUrl)
       
       // Test the API with a simple request (we'll use the /bots/status endpoint)
       const response = await fetch(`${apiUrl}/bots/status`, {

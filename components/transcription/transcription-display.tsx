@@ -12,6 +12,7 @@ import {
   getMeetingTranscript,
   updateTranscriptionLanguage
 } from "@/lib/transcription-service"
+import { useWebSocket } from "@/lib/websocket-context"
 import { useEffect, useRef, useState, useCallback } from "react"
 import { DownloadTranscript } from "./download-transcript"
 import { TranscriptSearch } from "./transcript-search"
@@ -217,6 +218,7 @@ export function TranscriptionDisplay({
   const [newSegmentIds, setNewSegmentIds] = useState<Set<string>>(new Set())
   const [selectedLanguage, setSelectedLanguage] = useState<string>("auto")
   const [isChangingLanguage, setIsChangingLanguage] = useState(false)
+  const { subscribeToMeeting, unsubscribeFromMeeting, onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
   const pollingInterval = useRef<NodeJS.Timeout | null>(null)
   const transcriptionRef = useRef<HTMLDivElement>(null)
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -235,89 +237,75 @@ export function TranscriptionDisplay({
     }
   }, [newSegmentIds]);
 
-  // Function to poll for transcription updates in live mode
-  const pollForUpdates = async () => {
+  // Function to subscribe to WebSocket updates for a meeting
+  const subscribeToWebSocketUpdates = async (internalMeetingId: number) => {
+    try {
+      await subscribeToMeeting(internalMeetingId)
+      console.log("Subscribed to WebSocket updates for meeting:", internalMeetingId)
+    } catch (err) {
+      console.error("Failed to subscribe to WebSocket:", err)
+      setError("Failed to connect to real-time updates.")
+    }
+  }
+
+  // Function to unsubscribe from WebSocket updates
+  const unsubscribeFromWebSocketUpdates = async (internalMeetingId: number) => {
+    try {
+      await unsubscribeFromMeeting(internalMeetingId)
+      console.log("Unsubscribed from WebSocket updates for meeting:", internalMeetingId)
+    } catch (err) {
+      console.error("Failed to unsubscribe from WebSocket:", err)
+    }
+  }
+
+  // Function to poll once for initial data on page load
+  const pollOnceForInitialData = async () => {
     if (!meetingId) return
 
     setIsPolling(true)
     try {
-      console.log("Polling for updates with meetingId:", meetingId);
+      console.log("Polling once for initial data with meetingId:", meetingId);
       const data = await getTranscription(meetingId)
-      console.log("Polling update received:", data.segments.length, "segments");
+      console.log("Initial data received:", data.segments.length, "segments");
 
-      // Reset retry count on successful request
-      retryCount.current = 0
+      // Set initial segments
+      setSegments([...data.segments].sort((a, b) => 
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      ));
 
-      // Track new or changed segments for highlight effect
-      const changedSegmentIds = new Set<string>();
-
-      // Always use the most recent segments from the API
-      // but maintain the highlight effect for new/changed content
-      setSegments((prevSegments) => {
-        // Get the previous segments as a map for easy comparison
-        const prevSegmentsMap = new Map(prevSegments.map(s => [s.id, s]));
-        
-        // Mark segments that are new or changed compared to previous state
-        data.segments.forEach(segment => {
-          const prevSegment = prevSegmentsMap.get(segment.id);
-          if (!prevSegment || prevSegment.text !== segment.text) {
-            changedSegmentIds.add(segment.id);
-          }
-        });
-        
-        // Log changes if any
-        if (changedSegmentIds.size > 0) {
-          console.log(`Found ${changedSegmentIds.size} new or updated segments`);
-        }
-        
-        // Always return the complete set of segments from the API
-        // This ensures we're always in sync with the backend
-        return [...data.segments].sort((a, b) => 
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        );
-      });
-
-      // Update the highlight state
-      if (changedSegmentIds.size > 0) {
-        setNewSegmentIds(changedSegmentIds);
-      }
-
-      // Update language if it has changed in the transcription data
+      // Update language if detected
       if (data.language && data.language !== selectedLanguage && data.language !== "auto-detected") {
         setSelectedLanguage(data.language);
       }
 
       setTranscription(data)
 
-      // If the status is no longer active, stop polling
-      if (data.status !== "active") {
-        if (pollingInterval.current) {
-          clearInterval(pollingInterval.current)
-          pollingInterval.current = null
-          console.log("Stopping polling because status is:", data.status);
+      // If meeting is active, subscribe to WebSocket updates
+      if (data.status === "active") {
+        // Extract internal meeting ID from the meetingId string
+        // meetingId format: "platform/nativeMeetingId" or "platform/nativeMeetingId/internalId"
+        const parts = meetingId.split('/');
+        if (parts.length >= 3) {
+          // Has internal ID
+          const internalMeetingId = parseInt(parts[2]);
+          if (!isNaN(internalMeetingId)) {
+            console.log("Subscribing to WebSocket for active meeting:", internalMeetingId);
+            await subscribeToWebSocketUpdates(internalMeetingId);
+          } else {
+            setError("Invalid meeting ID format for WebSocket connection");
+          }
+        } else {
+          setError("Meeting ID missing internal ID for WebSocket connection");
         }
-
+      } else {
+        console.log("Meeting not active, status:", data.status);
         if (data.status === "error") {
           setError("Transcription service reported an error. Please try again.")
         }
       }
     } catch (err) {
-      console.error("Error polling for transcription:", err)
-
-      // Implement retry logic
-      retryCount.current += 1
-      if (retryCount.current >= MAX_RETRIES) {
-        setError("Failed to update transcription after multiple attempts")
-
-        // Stop polling after max retries
-        if (pollingInterval.current) {
-          clearInterval(pollingInterval.current)
-          pollingInterval.current = null
-          console.log("Stopping polling after max retries");
-        }
-      } else {
-        setError(`Failed to update transcription. Retrying... (${retryCount.current}/${MAX_RETRIES})`)
-      }
+      console.error("Error getting initial transcription data:", err)
+      setError("Failed to load initial transcription data")
     } finally {
       setIsPolling(false)
     }
@@ -347,15 +335,8 @@ export function TranscriptionDisplay({
     }
   }
 
-  // Start polling when component mounts in live mode
+  // Initialize transcription when component mounts
   useEffect(() => {
-    // Clean up any existing polling interval
-    if (pollingInterval.current) {
-      clearInterval(pollingInterval.current)
-      pollingInterval.current = null
-      console.log("Cleared existing polling interval");
-    }
-    
     // Reset state when meeting ID changes
     setSegments([])
     setTranscription(null)
@@ -363,25 +344,72 @@ export function TranscriptionDisplay({
     
     if (shouldDisplay) {
       if (isLive) {
-        // Live mode: start polling
-        console.log("Starting polling for meetingId:", meetingId);
-        pollForUpdates()
-        pollingInterval.current = setInterval(pollForUpdates, 800) // Poll more frequently
+        // Live mode: poll once for initial data, then use WebSocket if active
+        console.log("Starting live transcription for meetingId:", meetingId);
+        pollOnceForInitialData()
       } else {
         // Historical mode: just fetch once
         console.log("Fetching historical transcript for meetingId:", meetingId);
         fetchHistoricalTranscript()
       }
     }
+  }, [shouldDisplay, meetingId, isLive])
 
-    // Clean up interval when component unmounts
-    return () => {
-      if (pollingInterval.current) {
-        clearInterval(pollingInterval.current)
-        console.log("Cleaned up polling interval on unmount");
+  // Handle WebSocket transcript updates
+  useEffect(() => {
+    const handleTranscriptUpdate = (meetingId: number, segments: any[]) => {
+      console.log("WebSocket transcript update:", segments.length, "segments")
+      
+      // Convert WebSocket segments to our format
+      const convertedSegments = segments.map(segment => ({
+        id: `${segment.start}-${segment.text.slice(0, 20).replace(/\s+/g, '-')}`,
+        text: segment.text || "",
+        timestamp: new Date(Date.now() - (Date.now() - segment.start * 1000)).toISOString(),
+        speaker: segment.speaker || "Unknown",
+      }))
+      
+      // Track new or changed segments for highlight effect
+      const changedSegmentIds = new Set<string>()
+      
+      setSegments((prevSegments) => {
+        const prevSegmentsMap = new Map(prevSegments.map(s => [s.id, s]))
+        
+        // Mark segments that are new or changed
+        convertedSegments.forEach(segment => {
+          const prevSegment = prevSegmentsMap.get(segment.id)
+          if (!prevSegment || prevSegment.text !== segment.text) {
+            changedSegmentIds.add(segment.id)
+          }
+        })
+        
+        if (changedSegmentIds.size > 0) {
+          console.log(`Found ${changedSegmentIds.size} new or updated segments via WebSocket`)
+        }
+        
+        return [...convertedSegments].sort((a, b) => 
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        )
+      })
+      
+      if (changedSegmentIds.size > 0) {
+        setNewSegmentIds(changedSegmentIds)
       }
     }
-  }, [shouldDisplay, meetingId, isLive])
+
+    const handleMeetingStatusUpdate = (meetingId: number, status: string) => {
+      console.log("WebSocket meeting status:", status)
+      if (status !== "active") {
+        setError(`Meeting status changed to: ${status}`)
+      }
+    }
+
+    // Subscribe to WebSocket events
+    onMeetingStatusChange(handleMeetingStatusUpdate)
+    
+    return () => {
+      offMeetingStatusChange(handleMeetingStatusUpdate)
+    }
+  }, [onMeetingStatusChange, offMeetingStatusChange])
 
   // Scroll to bottom when new segments are added
   useEffect(() => {
@@ -405,10 +433,13 @@ export function TranscriptionDisplay({
     try {
       setIsLoading(true)
 
-      // Clear polling interval
-      if (pollingInterval.current) {
-        clearInterval(pollingInterval.current)
-        pollingInterval.current = null
+      // Unsubscribe from WebSocket updates
+      const parts = meetingId.split('/');
+      if (parts.length >= 3) {
+        const internalMeetingId = parseInt(parts[2]);
+        if (!isNaN(internalMeetingId)) {
+          await unsubscribeFromWebSocketUpdates(internalMeetingId);
+        }
       }
 
       await stopTranscription(meetingId)

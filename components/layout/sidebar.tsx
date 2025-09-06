@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { useRouter } from "next/navigation"
 import { PlusCircle, RefreshCw, Circle, CheckCircle2, AlertCircle, MoreVertical, Settings } from "lucide-react"
@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Meeting, getMeetingHistory } from "@/lib/transcription-service"
 import { cn } from "@/lib/utils"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { useWebSocket } from "@/lib/websocket-context"
 import Link from "next/link"
 import Image from "next/image"
 
@@ -23,6 +24,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const { onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
 
   const loadMeetings = async () => {
     setIsLoading(true)
@@ -59,9 +61,38 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
     setIsRefreshing(false)
   }
 
+  // Handle WebSocket meeting status updates
+  const handleMeetingStatusUpdate = useCallback((meetingId: number, status: string) => {
+    console.log(`Sidebar received status update: meeting ${meetingId} -> ${status}`)
+    
+    setMeetings(prevMeetings => {
+      return prevMeetings.map(meeting => {
+        // Extract internal meeting ID from the meeting.id string
+        // Format: "platform/nativeMeetingId/internalId"
+        const parts = meeting.id.split('/')
+        const internalId = parts.length >= 3 ? parseInt(parts[2]) : null
+        
+        if (internalId === meetingId) {
+          console.log(`Updating meeting ${meeting.id} status from ${meeting.status} to ${status}`)
+          return { ...meeting, status: status as any }
+        }
+        return meeting
+      })
+    })
+  }, [])
+
   useEffect(() => {
     loadMeetings()
   }, [])
+
+  // Subscribe to WebSocket status updates
+  useEffect(() => {
+    onMeetingStatusChange(handleMeetingStatusUpdate)
+    
+    return () => {
+      offMeetingStatusChange(handleMeetingStatusUpdate)
+    }
+  }, [handleMeetingStatusUpdate, onMeetingStatusChange, offMeetingStatusChange])
 
   const getStatusIcon = (status: string | undefined) => {
     switch (status) {

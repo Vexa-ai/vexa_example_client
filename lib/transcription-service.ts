@@ -1,5 +1,12 @@
 import { MOCK_MODE } from "./config"
 import { parseMeetingUrl } from "./utils"
+import { 
+  getWebSocketService, 
+  convertWebSocketSegment,
+  type TranscriptMutableEvent,
+  type TranscriptFinalizedEvent,
+  type MeetingStatusEvent 
+} from "./websocket-service"
 
 // Types for our transcription service
 export interface TranscriptionSegment {
@@ -98,8 +105,8 @@ const mockSegments: TranscriptionSegment[] = [
 // Mock data storage
 const mockTranscriptionData: Record<string, TranscriptionData> = {}
 
-// Vexa API configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_VEXA_API_URL || "https://gateway.dev.vexa.ai"
+// Vexa API configuration - will be set dynamically based on user settings
+let API_BASE_URL = "http://localhost:18056"
 
 // Helper function to handle API responses
 async function handleApiResponse<T>(response: Response): Promise<T> {
@@ -177,14 +184,95 @@ export function clearApiKey(): void {
   }
 }
 
+// Function to set the API base URL in cookies
+export function setApiBaseUrl(url: string): void {
+  try {
+    if (typeof window !== 'undefined') {
+      const days = 30;
+      const date = new Date();
+      date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+      
+      document.cookie = `vexa_api_base_url=${encodeURIComponent(url)};expires=${date.toUTCString()};path=/`;
+      console.log("API base URL cookie set");
+    }
+  } catch (error) {
+    console.error("Error setting API base URL:", error);
+  }
+}
+
+// Function to get the API base URL from cookies
+export function getApiBaseUrl(): string {
+  try {
+    if (typeof window !== 'undefined') {
+      const match = document.cookie.match(/(^|;)\s*vexa_api_base_url\s*=\s*([^;]+)/);
+      const cookieValue = match ? decodeURIComponent(match[2]) : '';
+      
+      if (cookieValue) {
+        console.log("Found API base URL in cookies");
+        return cookieValue;
+      }
+    }
+    
+    // If we couldn't get from cookies, try environment variable or use default
+    const envUrl = process.env.NEXT_PUBLIC_VEXA_API_URL || 'http://localhost:18056';
+    return envUrl;
+  } catch (error) {
+    console.error("Error getting API base URL:", error);
+    return 'http://localhost:18056';
+  }
+}
+
+// Function to set the WebSocket URL in cookies
+export function setWebSocketUrl(url: string): void {
+  try {
+    if (typeof window !== 'undefined') {
+      const days = 30;
+      const date = new Date();
+      date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+      
+      document.cookie = `vexa_ws_url=${encodeURIComponent(url)};expires=${date.toUTCString()};path=/`;
+      console.log("WebSocket URL cookie set");
+    }
+  } catch (error) {
+    console.error("Error setting WebSocket URL:", error);
+  }
+}
+
+// Function to get the WebSocket URL from cookies
+export function getWebSocketUrl(): string {
+  try {
+    if (typeof window !== 'undefined') {
+      const match = document.cookie.match(/(^|;)\s*vexa_ws_url\s*=\s*([^;]+)/);
+      const cookieValue = match ? decodeURIComponent(match[2]) : '';
+      
+      if (cookieValue) {
+        console.log("Found WebSocket URL in cookies");
+        return cookieValue;
+      }
+    }
+    
+    // If we couldn't get from cookies, try environment variable or use default
+    const envUrl = process.env.NEXT_PUBLIC_VEXA_WS_URL || 'ws://localhost:18056/ws';
+    return envUrl;
+  } catch (error) {
+    console.error("Error getting WebSocket URL:", error);
+    return 'ws://localhost:18056/ws';
+  }
+}
+
 // Function to get headers with Vexa API key - with extra logging
 function getHeaders() {
-  // Get the API key
+  // Get the API key and base URL
   const apiKey = getApiKey();
+  const baseUrl = getApiBaseUrl();
+  
+  // Update the global API_BASE_URL
+  API_BASE_URL = baseUrl;
   
   // Add extensive logging
   console.log("Building API headers");
   console.log("Has API key:", !!apiKey);
+  console.log("API Base URL:", baseUrl);
   if (apiKey) {
     // Only log part of the key for security
     console.log("API key starts with:", apiKey.substring(0, 4));
@@ -559,6 +647,87 @@ export async function getMeetingHistory(): Promise<Meeting[]> {
   } catch (error) {
     console.error("Error getting meeting history:", error)
     throw error
+  }
+}
+
+/**
+ * Start WebSocket connection for real-time transcription updates
+ * @param meetingId The internal meeting ID (number) to subscribe to
+ * @param onTranscriptMutable Callback for mutable transcript updates
+ * @param onTranscriptFinalized Callback for finalized transcript updates
+ * @param onMeetingStatus Callback for meeting status changes
+ * @param onError Callback for errors
+ * @param onConnected Callback when WebSocket connects
+ * @param onDisconnected Callback when WebSocket disconnects
+ */
+export async function startWebSocketTranscription(
+  meetingId: number,
+  onTranscriptMutable: (segments: TranscriptionSegment[]) => void,
+  onTranscriptFinalized: (segments: TranscriptionSegment[]) => void,
+  onMeetingStatus: (status: string) => void,
+  onError: (error: string) => void,
+  onConnected: () => void,
+  onDisconnected: () => void
+): Promise<void> {
+  const wsService = getWebSocketService()
+
+  // Set up event handlers
+  wsService.setOnTranscriptMutable((event: TranscriptMutableEvent) => {
+    const segments = event.payload.segments.map(segment => 
+      convertWebSocketSegment(segment, meetingId.toString())
+    )
+    onTranscriptMutable(segments)
+  })
+
+  wsService.setOnTranscriptFinalized((event: TranscriptFinalizedEvent) => {
+    const segments = event.payload.segments.map(segment => 
+      convertWebSocketSegment(segment, meetingId.toString())
+    )
+    onTranscriptFinalized(segments)
+  })
+
+  wsService.setOnMeetingStatus((event: MeetingStatusEvent) => {
+    onMeetingStatus(event.payload.status)
+  })
+
+  wsService.setOnError((event) => {
+    onError(event.payload.error)
+  })
+
+  wsService.setOnConnected(onConnected)
+  wsService.setOnDisconnected(onDisconnected)
+
+  // Connect and subscribe
+  await wsService.connect()
+  await wsService.subscribeToMeeting(meetingId)
+}
+
+/**
+ * Stop WebSocket connection for a meeting
+ * @param meetingId The internal meeting ID to unsubscribe from
+ */
+export async function stopWebSocketTranscription(meetingId: number): Promise<void> {
+  const wsService = getWebSocketService()
+  
+  if (wsService.isConnected()) {
+    await wsService.unsubscribeFromMeeting(meetingId)
+  }
+  
+  // If no more meetings are subscribed, disconnect
+  const subscribedMeetings = wsService.getSubscribedMeetings()
+  if (subscribedMeetings.length === 0) {
+    wsService.disconnect()
+  }
+}
+
+/**
+ * Get WebSocket connection status
+ */
+export function getWebSocketStatus(): { connected: boolean; subscribedMeetings: number[] } {
+  const wsService = getWebSocketService()
+  return {
+    connected: wsService.isConnected(),
+    subscribedMeetings: wsService.getSubscribedMeetings()
   }
 }
 
