@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { getApiKey, getApiUrl } from "@/lib/transcription-service"
 import { AlertCircle, CheckCircle2 } from "lucide-react"

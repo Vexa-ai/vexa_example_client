@@ -1,5 +1,12 @@
 import { MOCK_MODE } from "./config"
 import { parseMeetingUrl } from "./utils"
+import { 
+  getWebSocketService, 
+  convertWebSocketSegment,
+  type TranscriptMutableEvent,
+  type TranscriptFinalizedEvent,
+  type MeetingStatusEvent 
+} from "./websocket-service"
 
 // Types for our transcription service
 export interface TranscriptionSegment {
@@ -129,6 +136,25 @@ function getApiBaseUrl(): string {
   return getApiUrl();
 }
 
+// Function to get the WebSocket URL from the API base URL
+export function getWebSocketUrl(): string {
+  const apiUrl = getApiUrl();
+  if (apiUrl.startsWith('https://')) {
+    return apiUrl.replace('https://', 'wss://') + '/ws';
+  } else if (apiUrl.startsWith('http://')) {
+    return apiUrl.replace('http://', 'ws://') + '/ws';
+  } else {
+    // Default to secure WebSocket
+    return 'wss://devapi.dev.vexa.ai/ws';
+  }
+}
+
+// Function to set the WebSocket URL (derived from API URL)
+export function setWebSocketUrl(url: string): void {
+  // WebSocket URL is derived from API URL, so we don't store it separately
+  console.log("WebSocket URL is derived from API URL:", url);
+}
+
 // Helper function to handle API responses
 async function handleApiResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -228,12 +254,12 @@ export function getApiUrl(): string {
     }
 
     // Final fallback to default URL
-    const defaultUrl = "https://api.cloud.vexa.ai";
+    const defaultUrl = "https://devapi.dev.vexa.ai";
     console.log("Using default API URL:", defaultUrl);
     return defaultUrl;
   } catch (error) {
     console.error("Error getting API URL:", error);
-    return "https://api.cloud.vexa.ai";
+    return "https://devapi.dev.vexa.ai";
   }
 }
 
@@ -342,18 +368,50 @@ export async function startTranscription(
       language: language === "auto" ? null : language,
     }
 
-    const response = await fetch(`${getApiBaseUrl()}/bots`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify(requestPayload),
-    })
+     const response = await fetch(`${getApiBaseUrl()}/bots`, {
+       method: "POST",
+       headers: getHeaders(),
+       body: JSON.stringify(requestPayload),
+     })
+     
+     // Some gateways return 202 with no body; attempt to read but tolerate failures
+     let postData: any = null
+     try {
+       postData = await handleApiResponse<any>(response)
+     } catch (e) {
+       // ignore; we'll discover the meeting via /meetings shortly
+     }
 
-    await handleApiResponse<any>(response)
+     // After starting the bot, discover the internal meeting id so we can subscribe via WebSocket
+     // We look it up by platform + native_meeting_id
+     try {
+       const meetingsRes = await fetch(`${getApiBaseUrl()}/meetings`, {
+         method: "GET",
+         headers: getHeaders(),
+       })
+       const meetingsData = await handleApiResponse<any>(meetingsRes)
+       const matched = (meetingsData?.meetings || []).find((m: any) =>
+         m?.platform === platform && m?.native_meeting_id === nativeMeetingId
+       )
 
-    return {
-      success: true,
-      meetingId: `${platform}/${nativeMeetingId}`, // We're storing the full ID that we need for future calls
-    }
+       if (matched?.id != null) {
+         console.log(`Found internal meeting ID: ${matched.id} for ${platform}/${nativeMeetingId}`)
+         return {
+           success: true,
+           meetingId: `${platform}/${nativeMeetingId}/${matched.id}`,
+         }
+       }
+     } catch (e) {
+       // If lookup fails, fall back to two-part id
+       console.warn("Failed to look up internal meeting id after starting bot; falling back", e)
+     }
+
+     // Fallback: return two-part id so polling still works (WS will be skipped)
+     console.log(`Using fallback meeting ID format: ${platform}/${nativeMeetingId}`)
+     return {
+       success: true,
+       meetingId: `${platform}/${nativeMeetingId}`,
+     }
   } catch (error) {
     console.error("Error starting transcription:", error)
     throw error
@@ -892,8 +950,177 @@ export async function deleteMeeting(meetingId: string): Promise<{ success: boole
 
     await handleApiResponse<any>(response)
     return { success: true }
-  } catch (error) {
-    console.error("Error deleting meeting:", error)
-    throw error
+   } catch (error) {
+     console.error("Error deleting meeting:", error)
+     throw error
+   }
+ }
+
+/**
+ * Start WebSocket connection for real-time transcription updates
+ * @param meetingId The internal meeting ID (number) to subscribe to
+ * @param onTranscriptMutable Callback for mutable transcript updates
+ * @param onTranscriptFinalized Callback for finalized transcript updates
+ * @param onMeetingStatus Callback for meeting status changes
+ * @param onError Callback for errors
+ * @param onConnected Callback when WebSocket connects
+ * @param onDisconnected Callback when WebSocket disconnects
+ */
+export async function startWebSocketTranscription(
+  meetingId: string | number,
+  onTranscriptMutable: (segments: TranscriptionSegment[]) => void,
+  onTranscriptFinalized: (segments: TranscriptionSegment[]) => void,
+  onMeetingStatus: (status: string) => void,
+  onError: (error: string) => void,
+  onConnected: () => void,
+  onDisconnected: () => void
+): Promise<void> {
+  const wsService = getWebSocketService()
+
+  // Set up event handlers
+  wsService.setOnTranscriptMutable((event: TranscriptMutableEvent) => {
+    console.log("🟢 [TRANSCRIPTION SERVICE] Received transcript.mutable:", event);
+    console.log("🟢 [TRANSCRIPTION SERVICE] Event payload:", event.payload);
+    console.log("🟢 [TRANSCRIPTION SERVICE] Event payload keys:", event.payload ? Object.keys(event.payload) : "null");
+    
+    try {
+      // Check if payload contains segments array
+      if (event.payload?.segments && Array.isArray(event.payload.segments)) {
+        console.log("🟢 [TRANSCRIPTION SERVICE] Found segments array with", event.payload.segments.length, "segments");
+        
+        // Convert each segment in the array
+        const convertedSegments = event.payload.segments.map((segmentData: any) => {
+          return convertWebSocketSegment(segmentData, meetingId.toString());
+        });
+        
+        console.log("🟢 [TRANSCRIPTION SERVICE] Converted", convertedSegments.length, "segments");
+        onTranscriptMutable(convertedSegments);
+        return;
+      }
+      
+      // Try different possible locations for single segment data
+      let segmentData = null;
+      
+      if (event.payload?.segment) {
+        segmentData = event.payload.segment;
+        console.log("🟢 [TRANSCRIPTION SERVICE] Found single segment in payload.segment");
+      } else if (event.payload) {
+        // Maybe the segment data is directly in payload
+        segmentData = event.payload;
+        console.log("🟢 [TRANSCRIPTION SERVICE] Using payload as single segment data");
+      } else if ((event as any).segment) {
+        // Maybe segment is directly in event
+        segmentData = (event as any).segment;
+        console.log("🟢 [TRANSCRIPTION SERVICE] Found single segment directly in event");
+      } else {
+        console.error("🟢 [TRANSCRIPTION SERVICE] No segment data found in event");
+        console.log("🟢 [TRANSCRIPTION SERVICE] Full event structure:", JSON.stringify(event, null, 2));
+        return;
+      }
+      
+      const segment = convertWebSocketSegment(segmentData, meetingId.toString())
+      onTranscriptMutable([segment])
+    } catch (error) {
+      console.error("🟢 [TRANSCRIPTION SERVICE] Error processing transcript.mutable:", error);
+      console.error("🟢 [TRANSCRIPTION SERVICE] Event structure:", event);
+    }
+  })
+
+  wsService.setOnTranscriptFinalized((event: TranscriptFinalizedEvent) => {
+    console.log("🔵 [TRANSCRIPTION SERVICE] Received transcript.finalized:", event);
+    console.log("🔵 [TRANSCRIPTION SERVICE] Event payload:", event.payload);
+    console.log("🔵 [TRANSCRIPTION SERVICE] Event payload keys:", event.payload ? Object.keys(event.payload) : "null");
+    
+    try {
+      // Check if payload contains segments array
+      if (event.payload?.segments && Array.isArray(event.payload.segments)) {
+        console.log("🔵 [TRANSCRIPTION SERVICE] Found segments array with", event.payload.segments.length, "segments");
+        
+        // Convert each segment in the array
+        const convertedSegments = event.payload.segments.map((segmentData: any) => {
+          return convertWebSocketSegment(segmentData, meetingId.toString());
+        });
+        
+        console.log("🔵 [TRANSCRIPTION SERVICE] Converted", convertedSegments.length, "segments");
+        onTranscriptFinalized(convertedSegments);
+        return;
+      }
+      
+      // Try different possible locations for single segment data
+      let segmentData = null;
+      
+      if (event.payload?.segment) {
+        segmentData = event.payload.segment;
+        console.log("🔵 [TRANSCRIPTION SERVICE] Found single segment in payload.segment");
+      } else if (event.payload) {
+        // Maybe the segment data is directly in payload
+        segmentData = event.payload;
+        console.log("🔵 [TRANSCRIPTION SERVICE] Using payload as single segment data");
+      } else if ((event as any).segment) {
+        // Maybe segment is directly in event
+        segmentData = (event as any).segment;
+        console.log("🔵 [TRANSCRIPTION SERVICE] Found single segment directly in event");
+      } else {
+        console.error("🔵 [TRANSCRIPTION SERVICE] No segment data found in event");
+        console.log("🔵 [TRANSCRIPTION SERVICE] Full event structure:", JSON.stringify(event, null, 2));
+        return;
+      }
+      
+      const segment = convertWebSocketSegment(segmentData, meetingId.toString())
+      onTranscriptFinalized([segment])
+    } catch (error) {
+      console.error("🔵 [TRANSCRIPTION SERVICE] Error processing transcript.finalized:", error);
+      console.error("🔵 [TRANSCRIPTION SERVICE] Event structure:", event);
+    }
+  })
+
+  wsService.setOnMeetingStatus((event: MeetingStatusEvent) => {
+    console.log("🟡 [TRANSCRIPTION SERVICE] Received meeting.status:", event);
+    try {
+      onMeetingStatus(event.payload?.status || "unknown")
+    } catch (error) {
+      console.error("🟡 [TRANSCRIPTION SERVICE] Error processing meeting.status:", error);
+      console.error("🟡 [TRANSCRIPTION SERVICE] Event structure:", event);
+    }
+  })
+
+  wsService.setOnError((event) => {
+    onError(event.error)
+  })
+
+  wsService.setOnConnected(onConnected)
+  wsService.setOnDisconnected(onDisconnected)
+
+  // Connect and subscribe
+  await wsService.connect()
+  await wsService.subscribeToMeeting(meetingId)
+}
+
+/**
+ * Stop WebSocket connection for a meeting
+ * @param meetingId The internal meeting ID to unsubscribe from
+ */
+export async function stopWebSocketTranscription(meetingId: string | number): Promise<void> {
+  const wsService = getWebSocketService()
+  
+  if (wsService.isConnected()) {
+    await wsService.unsubscribeFromMeeting(meetingId)
+  }
+  
+  // If no more meetings are subscribed, disconnect
+  const subscribedMeetings = wsService.getSubscribedMeetings()
+  if (subscribedMeetings.length === 0) {
+    wsService.disconnect()
+  }
+}
+
+/**
+ * Get WebSocket connection status
+ */
+export function getWebSocketStatus(): { connected: boolean; subscribedMeetings: string[] } {
+  const wsService = getWebSocketService()
+  return {
+    connected: wsService.isConnected(),
+    subscribedMeetings: wsService.getSubscribedMeetings()
   }
 }

@@ -7,12 +7,13 @@ import { AlertCircle, Loader2, Clock, History, Globe, Search, Timer } from "luci
 import {
   type TranscriptionData,
   type TranscriptionSegment,
-  getTranscription,
   stopTranscription,
-  getMeetingTranscript,
-  updateTranscriptionLanguage
+  updateTranscriptionLanguage,
+  startWebSocketTranscription,
+  stopWebSocketTranscription,
+  getWebSocketStatus,
 } from "@/lib/transcription-service"
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import { DownloadTranscript } from "./download-transcript"
 import { TranscriptSearch } from "./transcript-search"
 import { cn } from "@/lib/utils"
@@ -212,186 +213,376 @@ export function TranscriptionDisplay({
   const [isLoading, setIsLoading] = useState(false)
   const [isPolling, setIsPolling] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [segments, setSegments] = useState<TranscriptionSegment[]>([])
+  const [allSegments, setAllSegments] = useState<TranscriptionSegment[]>([])
+  const [mutableSegmentIds, setMutableSegmentIds] = useState<Set<string>>(new Set())
   const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | null>(null)
-  const [newSegmentIds, setNewSegmentIds] = useState<Set<string>>(new Set())
+  const [newMutableSegmentIds, setNewMutableSegmentIds] = useState<Set<string>>(new Set())
   const [selectedLanguage, setSelectedLanguage] = useState<string>("auto")
   const [isChangingLanguage, setIsChangingLanguage] = useState(false)
+  const [isWebSocketConnected, setIsWebSocketConnected] = useState(false)
+  const [wsError, setWsError] = useState<string | null>(null)
   const userHasSelectedLanguage = useRef(false)
   const pollingInterval = useRef<NodeJS.Timeout | null>(null)
   const transcriptionRef = useRef<HTMLDivElement>(null)
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const retryCount = useRef(0)
   const MAX_RETRIES = 3
+  const internalMeetingId = useRef<string | number | null>(null)
 
   const shouldDisplay = !!meetingId
 
-  // Clear highlight effect after a delay
+  // Text cleaner similar to Python script
+  const cleanText = useCallback((text: string | undefined | null): string => {
+    if (!text) return ""
+    const trimmed = text.trim()
+    // Collapse multiple whitespace to a single space
+    return trimmed.replace(/\s+/g, ' ')
+  }, [])
+
+  // Key generator using absolute UTC time when available
+  const getAbsKey = useCallback((segment: any): string => {
+    return segment.absolute_start_time || segment.timestamp || segment.created_at || `no-utc-${segment.id || ''}`
+  }, [])
+
+  // Comparator: strict absolute UTC ordering, non-UTC go last
+  const compareByAbsoluteUtc = useCallback((a: any, b: any): number => {
+    const aUtc = a.absolute_start_time || a.timestamp
+    const bUtc = b.absolute_start_time || b.timestamp
+    const aHasUtc = !!a.absolute_start_time
+    const bHasUtc = !!b.absolute_start_time
+    if (aHasUtc && !bHasUtc) return -1
+    if (!aHasUtc && bHasUtc) return 1
+    const at = new Date(aUtc).getTime()
+    const bt = new Date(bUtc).getTime()
+    return at - bt
+  }, [])
+
+  // Merge utility: key by absolute_start_time; prefer newer updated_at
+  const mergeByAbsoluteUtc = useCallback((prev: TranscriptionSegment[], incoming: TranscriptionSegment[]): TranscriptionSegment[] => {
+    const map = new Map<string, TranscriptionSegment>()
+
+    // Seed with previous segments
+    for (const s of prev) {
+      const key = getAbsKey(s)
+      if (key.startsWith('no-utc-')) continue
+      // Ensure cleaned text
+      const cleaned = { ...s, text: cleanText((s as any).text) }
+      map.set(key, cleaned)
+    }
+
+    // Apply incoming updates (only with absolute_start_time like Python script)
+    for (const s of incoming) {
+      if (!(s as any).absolute_start_time) continue
+      const key = getAbsKey(s)
+      if (key.startsWith('no-utc-')) continue
+      const existing = map.get(key) as any
+      const candidate: any = { ...s, text: cleanText((s as any).text) }
+      if (existing && existing.updated_at && candidate.updated_at) {
+        if (candidate.updated_at < existing.updated_at) {
+          continue
+        }
+      }
+      map.set(key, candidate)
+    }
+
+    return Array.from(map.values()).sort(compareByAbsoluteUtc)
+  }, [cleanText, compareByAbsoluteUtc, getAbsKey])
+
+  // Group consecutive segments by speaker and combine text (Python script style)
+  const groupSegmentsBySpeaker = useCallback((segments: TranscriptionSegment[]) => {
+    if (!segments || segments.length === 0) return [] as Array<{
+      speaker: string
+      startTime: string
+      endTime: string
+      combinedText: string
+      segments: TranscriptionSegment[]
+      isMutable: boolean
+      isHighlighted: boolean
+    }>
+
+    const sorted = [...segments].sort(compareByAbsoluteUtc)
+    const groups: Array<{
+      speaker: string
+      startTime: string
+      endTime: string
+      combinedText: string
+      segments: TranscriptionSegment[]
+      isMutable: boolean
+      isHighlighted: boolean
+    }> = []
+
+    let current: {
+      speaker: string
+      startTime: string
+      endTime: string
+      combinedText: string
+      segments: TranscriptionSegment[]
+      isMutable: boolean
+      isHighlighted: boolean
+    } | null = null
+
+    for (const seg of sorted) {
+      const speaker = (seg as any).speaker || 'Unknown Speaker'
+      const text = cleanText((seg as any).text)
+      const startTime = (seg as any).absolute_start_time || seg.timestamp
+      const endTime = (seg as any).absolute_end_time || seg.timestamp
+      const segKey = getAbsKey(seg)
+      const segIsMutable = mutableSegmentIds.has(segKey)
+      const segIsHighlighted = newMutableSegmentIds.has(segKey)
+
+      if (!text) continue
+
+      if (current && current.speaker === speaker) {
+        current.combinedText += ' ' + text
+        current.endTime = endTime
+        current.segments.push(seg)
+        current.isMutable = current.isMutable || segIsMutable
+        current.isHighlighted = current.isHighlighted || segIsHighlighted
+      } else {
+        if (current) groups.push(current)
+        current = {
+          speaker,
+          startTime,
+          endTime,
+          combinedText: text,
+          segments: [seg],
+          isMutable: segIsMutable,
+          isHighlighted: segIsHighlighted
+        }
+      }
+    }
+
+    if (current) groups.push(current)
+    return groups
+  }, [cleanText, compareByAbsoluteUtc, getAbsKey, mutableSegmentIds, newMutableSegmentIds])
+
+  const formatUtcTime = useCallback((utc: string): string => {
+    try {
+      const dt = new Date(utc)
+      return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    } catch {
+      return utc
+    }
+  }, [])
+
+  // Build a stable deduplication key across REST and WS sources
+  const getSegmentKey = useCallback((segment: any): string => {
+    // Use absolute_start_time if available (from REST API), otherwise fallback to timestamp
+    const timestamp = segment.absolute_start_time || segment.timestamp || segment.created_at
+    const text = (segment.text || "").trim()
+    const speaker = segment.speaker || ''
+
+    // Create a stable key using timestamp + speaker + text prefix
+    return `${timestamp}|${speaker}|${text.slice(0, 50)}`
+  }, [])
+
+  // WebSocket callback functions
+  const handleWebSocketTranscriptMutable = useCallback((newSegments: TranscriptionSegment[]) => {
+    console.log("🟢 [WEBSOCKET MUTABLE] === MUTABLE SEGMENTS RECEIVED ===");
+    console.log("🟢 [WEBSOCKET MUTABLE] Received mutable transcript segments:", newSegments.length);
+    
+    // Filter segments with text and absolute UTC only (mirror Python script)
+    const validSegments = newSegments
+      .filter(segment => segment.text && segment.text.trim().length > 0)
+      .filter(segment => (segment as any).absolute_start_time)
+      .map(s => ({ ...s, text: cleanText((s as any).text) }))
+    console.log("🟢 [WEBSOCKET MUTABLE] Valid segments (with absolute UTC):", validSegments.length);
+    
+    if (validSegments.length === 0) {
+      console.warn("🟢 [WEBSOCKET MUTABLE] All segments are empty, clearing mutable segments");
+      setMutableSegmentIds(new Set());
+      setNewMutableSegmentIds(new Set());
+      return;
+    }
+    
+    // Stop polling if we're receiving WebSocket data
+    if (pollingInterval.current) {
+      clearInterval(pollingInterval.current);
+      pollingInterval.current = null;
+      console.log("🔄 [POLLING] Stopped polling - WebSocket is receiving data");
+    }
+    
+    // Merge by absolute UTC key with updated_at preference
+    setAllSegments(prev => mergeByAbsoluteUtc(prev, validSegments))
+    
+    // Track which segments are mutable and highlight them
+    const mutableIds = new Set(validSegments.map(s => getAbsKey(s)));
+    setMutableSegmentIds(mutableIds);
+    setNewMutableSegmentIds(mutableIds); // Highlight mutable segments
+  }, [cleanText, getAbsKey, mergeByAbsoluteUtc]);
+
+  const handleWebSocketTranscriptFinalized = useCallback((newSegments: TranscriptionSegment[]) => {
+    console.log("🔵 [WEBSOCKET FINALIZED] === FINALIZED SEGMENTS RECEIVED ===");
+    console.log("🔵 [WEBSOCKET FINALIZED] Received finalized transcript segments:", newSegments.length);
+    
+    // Filter finalized segments that have absolute UTC time
+    const validSegments = newSegments
+      .filter(segment => segment.text && segment.text.trim().length > 0)
+      .filter(segment => (segment as any).absolute_start_time)
+      .map(s => ({ ...s, text: cleanText((s as any).text) }))
+    console.log("🔵 [WEBSOCKET FINALIZED] Valid segments (with absolute UTC):", validSegments.length);
+    
+    if (validSegments.length === 0) {
+      console.warn("🔵 [WEBSOCKET FINALIZED] All segments are empty, skipping update");
+      return;
+    }
+    
+    // Stop polling if we're receiving WebSocket data
+    if (pollingInterval.current) {
+      clearInterval(pollingInterval.current);
+      pollingInterval.current = null;
+      console.log("🔄 [POLLING] Stopped polling - WebSocket is receiving data");
+    }
+    
+    setAllSegments(prev => mergeByAbsoluteUtc(prev, validSegments))
+    
+    // Remove finalized segments from mutable tracking (no longer mutable)
+    setMutableSegmentIds(prevMutable => {
+      const finalizedIds = new Set(validSegments.map(s => getAbsKey(s)));
+      const newMutable = new Set([...prevMutable].filter(id => !finalizedIds.has(id)));
+      console.log("🔵 [WEBSOCKET FINALIZED] Removed", prevMutable.size - newMutable.size, "segments from mutable tracking");
+      return newMutable;
+    });
+    
+    // Clear highlights from finalized segments
+    setNewMutableSegmentIds(prevHighlighted => {
+      const finalizedIds = new Set(validSegments.map(s => getAbsKey(s)));
+      const newHighlighted = new Set([...prevHighlighted].filter(id => !finalizedIds.has(id)));
+      return newHighlighted;
+    });
+  }, [cleanText, getAbsKey, mergeByAbsoluteUtc]);
+
+  const handleWebSocketMeetingStatus = useCallback((status: string) => {
+    console.log("🟡 [WEBSOCKET] Meeting status changed to:", status);
+    if (status !== "active") {
+      // Stop WebSocket when meeting is no longer active
+      if (internalMeetingId.current) {
+        stopWebSocketTranscription(internalMeetingId.current);
+        setIsWebSocketConnected(false);
+      }
+    }
+  }, []);
+
+  const handleWebSocketError = useCallback((error: string) => {
+    console.error("🔴 [WEBSOCKET ERROR]:", error);
+    setWsError(error);
+    setIsWebSocketConnected(false);
+  }, []);
+
+  const handleWebSocketConnected = useCallback(() => {
+    console.log("✅ [WEBSOCKET] === WEBSOCKET CONNECTED SUCCESSFULLY! ===");
+    setIsWebSocketConnected(true);
+    setWsError(null);
+    
+    // Stop polling once WebSocket is connected
+    if (pollingInterval.current) {
+      clearInterval(pollingInterval.current);
+      pollingInterval.current = null;
+      console.log("🔄 [POLLING] Stopped polling - WebSocket is now active");
+    }
+  }, []);
+
+  const handleWebSocketDisconnected = useCallback(() => {
+    console.log("❌ [WEBSOCKET] Disconnected");
+    setIsWebSocketConnected(false);
+    // No polling fallback per Python script parity
+  }, [isLive]);
+
+  // Clear highlight effect after a delay (only for mutable segments)
   useEffect(() => {
-    if (newSegmentIds.size > 0) {
+    if (newMutableSegmentIds.size > 0) {
       const timer = setTimeout(() => {
-        setNewSegmentIds(new Set());
+        setNewMutableSegmentIds(new Set());
       }, 3000);
       return () => clearTimeout(timer);
     }
-  }, [newSegmentIds]);
+  }, [newMutableSegmentIds]);
 
   // Function to poll for transcription updates in live mode
-  const pollForUpdates = async () => {
-    if (!meetingId) return
-
-    setIsPolling(true)
-    try {
-      console.log("Polling for updates with meetingId:", meetingId);
-      const data = await getTranscription(meetingId)
-      console.log("Polling update received:", data.segments.length, "segments");
-
-      // Reset retry count on successful request
-      retryCount.current = 0
-
-      // Track new or changed segments for highlight effect
-      const changedSegmentIds = new Set<string>();
-
-      // Always use the most recent segments from the API
-      // but maintain the highlight effect for new/changed content
-      setSegments((prevSegments) => {
-        // Get the previous segments as a map for easy comparison
-        const prevSegmentsMap = new Map(prevSegments.map(s => [s.id, s]));
-        
-        // Mark segments that are new or changed compared to previous state
-        data.segments.forEach(segment => {
-          const prevSegment = prevSegmentsMap.get(segment.id);
-          if (!prevSegment || prevSegment.text !== segment.text) {
-            changedSegmentIds.add(segment.id);
-          }
-        });
-        
-        // Log changes if any
-        if (changedSegmentIds.size > 0) {
-          console.log(`Found ${changedSegmentIds.size} new or updated segments`);
-        }
-        
-        // Always return the complete set of segments from the API
-        // This ensures we're always in sync with the backend
-        return [...data.segments].sort((a, b) => 
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        );
-      });
-
-      // Update the highlight state
-      if (changedSegmentIds.size > 0) {
-        setNewSegmentIds(changedSegmentIds);
-      }
-
-      // Update language if it has changed in the transcription data, but only if the user hasn't manually selected one
-      if (!userHasSelectedLanguage.current && data.language && data.language !== selectedLanguage && data.language !== "auto-detected") {
-        setSelectedLanguage(data.language);
-      }
-
-      setTranscription(data)
-
-      // If the status is no longer active, stop polling
-      if (data.status !== "active") {
-        if (pollingInterval.current) {
-          clearInterval(pollingInterval.current)
-          pollingInterval.current = null
-          console.log("Stopping polling because status is:", data.status);
-        }
-
-        if (data.status === "error") {
-          setError("Transcription service reported an error. Please try again.")
-        }
-      }
-    } catch (err) {
-      console.error("Error polling for transcription:", err)
-
-      // Implement retry logic
-      retryCount.current += 1
-      if (retryCount.current >= MAX_RETRIES) {
-        setError("Failed to update transcription after multiple attempts")
-
-        // Stop polling after max retries
-        if (pollingInterval.current) {
-          clearInterval(pollingInterval.current)
-          pollingInterval.current = null
-          console.log("Stopping polling after max retries");
-        }
-      } else {
-        setError(`Failed to update transcription. Retrying... (${retryCount.current}/${MAX_RETRIES})`)
-      }
-    } finally {
-      setIsPolling(false)
-    }
-  }
+  // Removed polling path per Python script parity
 
   // Function to fetch historical transcripts (non-polling)
-  const fetchHistoricalTranscript = async () => {
-    if (!meetingId) return
-    
-    setIsLoading(true)
-    setError(null)
-    
-    try {
-      const data = await getMeetingTranscript(meetingId)
-      setSegments(data.segments)
-      setTranscription(data)
-      
-      // Update language from the historical transcript, if user hasn't manually chosen one
-      if (!userHasSelectedLanguage.current && data.language && data.language !== "auto-detected") {
-        setSelectedLanguage(data.language);
-      }
-    } catch (err) {
-      console.error("Error fetching historical transcript:", err)
-      setError("Failed to load transcript")
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  // Removed REST-only historical path per Python script parity
 
-  // Start polling when component mounts in live mode
+  // Hybrid approach: API for initial load + WebSocket for real-time updates
   useEffect(() => {
-    // Clean up any existing polling interval
-    if (pollingInterval.current) {
-      clearInterval(pollingInterval.current)
-      pollingInterval.current = null
-      console.log("Cleared existing polling interval");
+    console.log("🔄 [USEEFFECT] TranscriptionDisplay useEffect triggered with:", {
+      meetingId,
+      shouldDisplay,
+      isLive
+    });
+
+    // Clean up any existing WebSocket connections
+    if (internalMeetingId.current) {
+      stopWebSocketTranscription(internalMeetingId.current);
+      internalMeetingId.current = null;
     }
     
     // Reset state when meeting ID changes
-    setSegments([])
+    setAllSegments([])
+    setMutableSegmentIds(new Set())
+    setNewMutableSegmentIds(new Set())
     setTranscription(null)
     setError(null)
+    setWsError(null)
     setSelectedLanguage("auto")
+    setIsWebSocketConnected(false)
     userHasSelectedLanguage.current = false
     
     if (shouldDisplay) {
       if (isLive) {
-        // Live mode: start polling
-        console.log("Starting polling for meetingId:", meetingId);
-        pollForUpdates()
-        pollingInterval.current = setInterval(pollForUpdates, 800) // Poll more frequently
-      } else {
-        // Historical mode: just fetch once
-        console.log("Fetching historical transcript for meetingId:", meetingId);
-        fetchHistoricalTranscript()
+        // WebSocket-only flow mirroring Python script
+        const initializeWs = async () => {
+          try {
+            setIsLoading(true)
+
+            // Subscribe by native meeting id (platform/native_id) to mirror script
+            const parts = meetingId.split('/')
+            const platform = parts[0] || 'google_meet'
+            const nativeId = parts[1] || meetingId
+
+            // Start WS – the service already uses include_full
+            await startWebSocketTranscription(
+              { platform, native_id: nativeId } as any,
+              handleWebSocketTranscriptMutable,
+              handleWebSocketTranscriptFinalized,
+              handleWebSocketMeetingStatus,
+              handleWebSocketError,
+              handleWebSocketConnected,
+              handleWebSocketDisconnected
+            )
+            internalMeetingId.current = `${platform}/${nativeId}`
+          } catch (err) {
+            console.error("Error initializing websocket:", err)
+            setError("Failed to start WebSocket")
+          } finally {
+            setIsLoading(false)
+          }
+        }
+        initializeWs()
       }
     }
 
-    // Clean up interval when component unmounts
+    // Clean up interval and WebSocket when component unmounts
     return () => {
       if (pollingInterval.current) {
         clearInterval(pollingInterval.current)
         console.log("Cleaned up polling interval on unmount");
       }
+      
+      if (internalMeetingId.current) {
+        stopWebSocketTranscription(internalMeetingId.current);
+        console.log("Cleaned up WebSocket connection on unmount");
+      }
     }
-  }, [shouldDisplay, meetingId, isLive])
+  }, [shouldDisplay, meetingId, isLive, handleWebSocketTranscriptMutable, handleWebSocketTranscriptFinalized, handleWebSocketMeetingStatus, handleWebSocketError, handleWebSocketConnected, handleWebSocketDisconnected])
 
   // Scroll to bottom when new segments are added
   useEffect(() => {
     if (transcriptionRef.current && !highlightedSegmentId && isLive) {
       transcriptionRef.current.scrollTop = transcriptionRef.current.scrollHeight
     }
-  }, [segments, highlightedSegmentId, isLive])
+  }, [allSegments, highlightedSegmentId, isLive])
 
   // Scroll to highlighted segment
   useEffect(() => {
@@ -412,6 +603,13 @@ export function TranscriptionDisplay({
       if (pollingInterval.current) {
         clearInterval(pollingInterval.current)
         pollingInterval.current = null
+      }
+
+      // Stop WebSocket connection
+      if (internalMeetingId.current) {
+        await stopWebSocketTranscription(internalMeetingId.current);
+        internalMeetingId.current = null;
+        setIsWebSocketConnected(false);
       }
 
       await stopTranscription(meetingId)
@@ -443,7 +641,9 @@ export function TranscriptionDisplay({
       setSelectedLanguage(language);
       
       // Clear existing segments to start fresh with the new language
-      setSegments([]);
+      setAllSegments([]);
+      setMutableSegmentIds(new Set());
+      setNewMutableSegmentIds(new Set());
       
     } catch (err) {
       console.error("Error updating language:", err);
@@ -467,13 +667,50 @@ export function TranscriptionDisplay({
     <Card className="w-full border border-gray-200 shadow-sm flex flex-col h-full">
       <CardHeader className="flex flex-row items-center justify-between py-1 px-3 border-b">
         <div className="flex items-center gap-2">
-          {isLive && isPolling && <Loader2 className="h-3 w-3 animate-spin text-gray-500" />}
+          {isLive && (
+            <>
+              {isWebSocketConnected ? (
+                <div className="flex items-center gap-1">
+                  <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <span className="text-xs text-green-600 font-medium">Live</span>
+                </div>
+              ) : isPolling ? (
+                <div className="flex items-center gap-1">
+                  <Loader2 className="h-3 w-3 animate-spin text-gray-500" />
+                  <span className="text-xs text-gray-500">Polling</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <div className="h-2 w-2 bg-yellow-500 rounded-full"></div>
+                  <span className="text-xs text-yellow-600">Connecting...</span>
+                </div>
+              )}
+            </>
+          )}
           {!isLive && (
             <>
               <History className="h-3 w-3 text-gray-500" />
               <span className="text-xs font-medium">{title || "Meeting Transcript"}</span>
             </>
           )}
+
+          {/* Test button to manually trigger WebSocket callback */}
+          <button
+            onClick={() => {
+              console.log("🧪 [TEST] Manually triggering WebSocket callback");
+              const testSegments: TranscriptionSegment[] = [{
+                id: `test-${Date.now()}`,
+                text: "Test WebSocket segment - UI rendering test!",
+                timestamp: new Date().toISOString(),
+                speaker: "Test Speaker",
+                language: "en"
+              }];
+              handleWebSocketTranscriptMutable(testSegments);
+            }}
+            className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600 ml-2"
+          >
+            Test WS
+          </button>
         </div>
         <div className="flex items-center gap-1">
           {isLive && (
@@ -487,9 +724,9 @@ export function TranscriptionDisplay({
           )}
           {meetingId && (
             <DownloadTranscript
-              segments={segments}
+              segments={allSegments}
               meetingId={meetingId}
-              disabled={segments.length === 0 || isLoading}
+              disabled={allSegments.length === 0 || isLoading}
             />
           )}
           {isLive && onStop && (
@@ -500,9 +737,9 @@ export function TranscriptionDisplay({
         </div>
       </CardHeader>
       <CardContent className="p-0 flex-1 flex flex-col overflow-hidden">
-        {segments.length > 0 && (
+        {allSegments.length > 0 && (
           <div className="px-3 py-1">
-            <TranscriptSearch segments={segments} onHighlight={handleHighlightSegment} />
+            <TranscriptSearch segments={allSegments} onHighlight={handleHighlightSegment} />
           </div>
         )}
         
@@ -514,7 +751,15 @@ export function TranscriptionDisplay({
           </Alert>
         )}
 
-        {isLoading && !isLive && segments.length === 0 && (
+        {wsError && (
+          <Alert variant="default" className="mx-3 mt-1 py-1 border-yellow-500 bg-yellow-50">
+            <AlertCircle className="h-3 w-3 text-yellow-600" />
+            <AlertTitle className="text-xs text-yellow-800">WebSocket Warning</AlertTitle>
+            <AlertDescription className="text-xs text-yellow-700">{wsError}</AlertDescription>
+          </Alert>
+        )}
+
+        {isLoading && !isLive && allSegments.length === 0 && (
           <div className="flex justify-center items-center flex-1">
             <Loader2 className="h-6 w-6 animate-spin text-gray-500" />
           </div>
@@ -524,7 +769,7 @@ export function TranscriptionDisplay({
           ref={transcriptionRef} 
           className="flex-1 overflow-y-auto border-t border-gray-200 bg-gray-50 p-2 mt-1"
         >
-          {segments.length === 0 && !isLoading ? (
+          {allSegments.length === 0 && !isLoading ? (
             <div className="text-center text-gray-500 py-4">
               {isLive 
                 ? <TranscriptionCountdown />
@@ -533,30 +778,31 @@ export function TranscriptionDisplay({
             </div>
           ) : (
             <div className="space-y-1 font-light text-gray-800 pb-10">
-              {segments.map((segment) => (
-                <div
-                  key={segment.id}
-                  ref={el => { segmentRefs.current[segment.id] = el; }}
-                  className={cn(
-                    "px-2 py-1 transition-colors border-l-2 border-l-gray-200 hover:bg-gray-100",
-                    highlightedSegmentId === segment.id && "bg-gray-200 border-l-gray-500",
-                    newSegmentIds.has(segment.id) && "bg-green-50 border-l-green-500 animate-pulse"
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1">
-                      {segment.speaker && segment.speaker !== "Unknown" && (
-                        <p className="text-xs font-semibold text-gray-600">{segment.speaker}</p>
-                      )}
-                      <p className="text-sm leading-relaxed">{segment.text}</p>
+              {groupSegmentsBySpeaker(allSegments).map((group, idx) => {
+                const groupKey = `${group.speaker}-${group.startTime}-${idx}`
+                // No highlighting or special styling for active/mutable segments
+                return (
+                  <div
+                    key={groupKey}
+                    ref={el => { segmentRefs.current[groupKey] = el; }}
+                    className={cn(
+                      "px-2 py-1 transition-colors border-l-2 hover:bg-gray-100 border-l-gray-200"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        {group.speaker && group.speaker !== "Unknown" && (
+                          <p className="text-xs font-semibold text-gray-600">{group.speaker}</p>
+                        )}
+                        <p className="text-sm leading-relaxed">{group.combinedText}</p>
+                      </div>
+                      <span className="text-xs text-gray-500 whitespace-nowrap ml-1 flex-shrink-0">
+                        {formatUtcTime(group.startTime)}
+                      </span>
                     </div>
-                    <span className="text-xs text-gray-500 whitespace-nowrap flex items-center gap-0.5 ml-1 flex-shrink-0">
-                      <Clock className="h-3 w-3" />
-                      {formatTime(segment.timestamp)}
-                    </span>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
