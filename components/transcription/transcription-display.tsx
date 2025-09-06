@@ -452,8 +452,24 @@ export function TranscriptionDisplay({
     });
   }, [cleanText, getAbsKey, mergeByAbsoluteUtc]);
 
+  const [meetingStatus, setMeetingStatus] = useState<string | null>(isLive ? "connecting" : null);
+
   const handleWebSocketMeetingStatus = useCallback((status: string) => {
     console.log("🟡 [WEBSOCKET] Meeting status changed to:", status);
+    setMeetingStatus(status);
+    console.log("🟡 [DEBUG] Meeting status updated in state to:", status);
+
+    // Emit custom event to notify sidebar of status change
+    const meetingStatusEvent = new CustomEvent('meetingStatusChange', {
+      detail: {
+        meetingId: meetingId,
+        status: status,
+        timestamp: new Date().toISOString()
+      }
+    });
+    console.log("📡 [TRANSCRIPTION] Emitting meeting status change event:", meetingId, status);
+    window.dispatchEvent(meetingStatusEvent);
+
     if (status !== "active") {
       // Stop WebSocket when meeting is no longer active
       if (internalMeetingId.current) {
@@ -461,7 +477,7 @@ export function TranscriptionDisplay({
         setIsWebSocketConnected(false);
       }
     }
-  }, []);
+  }, [meetingId]);
 
   const handleWebSocketError = useCallback((error: string) => {
     console.error("🔴 [WEBSOCKET ERROR]:", error);
@@ -473,7 +489,8 @@ export function TranscriptionDisplay({
     console.log("✅ [WEBSOCKET] === WEBSOCKET CONNECTED SUCCESSFULLY! ===");
     setIsWebSocketConnected(true);
     setWsError(null);
-    
+    setMeetingStatus("connected");
+
     // Stop polling once WebSocket is connected
     if (pollingInterval.current) {
       clearInterval(pollingInterval.current);
@@ -509,7 +526,8 @@ export function TranscriptionDisplay({
     console.log("🔄 [USEEFFECT] TranscriptionDisplay useEffect triggered with:", {
       meetingId,
       shouldDisplay,
-      isLive
+      isLive,
+      currentMeetingStatus: meetingStatus
     });
 
     // Clean up any existing WebSocket connections
@@ -527,40 +545,41 @@ export function TranscriptionDisplay({
     setWsError(null)
     setSelectedLanguage("auto")
     setIsWebSocketConnected(false)
+    setMeetingStatus(null)
     userHasSelectedLanguage.current = false
     
-    if (shouldDisplay) {
-      if (isLive) {
-        // WebSocket-only flow mirroring Python script
-        const initializeWs = async () => {
-          try {
-            setIsLoading(true)
+    if (shouldDisplay && meetingId) {
+      // Subscribe to WebSocket immediately upon meeting request
+      const initializeWs = async () => {
+        try {
+          setIsLoading(true)
 
-            // Subscribe by native meeting id (platform/native_id) to mirror script
-            const parts = meetingId.split('/')
-            const platform = parts[0] || 'google_meet'
-            const nativeId = parts[1] || meetingId
+          // Subscribe by native meeting id (platform/native_id) to mirror script
+          const parts = meetingId.split('/')
+          const platform = parts[0] || 'google_meet'
+          const nativeId = parts[1] || meetingId
 
-            // Start WS – the service already uses include_full
-            await startWebSocketTranscription(
-              { platform, native_id: nativeId } as any,
-              handleWebSocketTranscriptMutable,
-              handleWebSocketTranscriptFinalized,
-              handleWebSocketMeetingStatus,
-              handleWebSocketError,
-              handleWebSocketConnected,
-              handleWebSocketDisconnected
-            )
-            internalMeetingId.current = `${platform}/${nativeId}`
-          } catch (err) {
-            console.error("Error initializing websocket:", err)
-            setError("Failed to start WebSocket")
-          } finally {
-            setIsLoading(false)
-          }
+          // Start WS – subscribe immediately upon request
+          await startWebSocketTranscription(
+            { platform, native_id: nativeId } as any,
+            handleWebSocketTranscriptMutable,
+            handleWebSocketTranscriptFinalized,
+            handleWebSocketMeetingStatus,
+            handleWebSocketError,
+            handleWebSocketConnected,
+            handleWebSocketDisconnected
+          )
+          internalMeetingId.current = `${platform}/${nativeId}`
+
+          console.log("🟢 [WEBSOCKET] Subscribed to meeting immediately upon request:", `${platform}/${nativeId}`)
+        } catch (err) {
+          console.error("Error initializing websocket:", err)
+          setError("Failed to start WebSocket")
+        } finally {
+          setIsLoading(false)
         }
-        initializeWs()
       }
+      initializeWs()
     }
 
     // Clean up interval and WebSocket when component unmounts
@@ -669,20 +688,30 @@ export function TranscriptionDisplay({
         <div className="flex items-center gap-2">
           {isLive && (
             <>
-              {isWebSocketConnected ? (
+              {meetingStatus && (
                 <div className="flex items-center gap-1">
-                  <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
-                  <span className="text-xs text-green-600 font-medium">Live</span>
-                </div>
-              ) : isPolling ? (
-                <div className="flex items-center gap-1">
-                  <Loader2 className="h-3 w-3 animate-spin text-gray-500" />
-                  <span className="text-xs text-gray-500">Polling</span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1">
-                  <div className="h-2 w-2 bg-yellow-500 rounded-full"></div>
-                  <span className="text-xs text-yellow-600">Connecting...</span>
+                  <div className={cn(
+                    "h-2 w-2 rounded-full",
+                    meetingStatus === "active" ? "bg-green-500 animate-pulse" :
+                    meetingStatus === "connected" ? "bg-green-500 animate-pulse" :
+                    meetingStatus === "requested" ? "bg-blue-500 animate-pulse" :
+                    meetingStatus === "connecting" ? "bg-yellow-500 animate-pulse" :
+                    meetingStatus === "stopping" ? "bg-yellow-500" :
+                    meetingStatus === "completed" ? "bg-gray-500" :
+                    "bg-red-500"
+                  )}></div>
+                  <span className={cn(
+                    "text-xs font-medium capitalize",
+                    meetingStatus === "active" ? "text-green-600" :
+                    meetingStatus === "connected" ? "text-green-600" :
+                    meetingStatus === "requested" ? "text-blue-600" :
+                    meetingStatus === "connecting" ? "text-yellow-600" :
+                    meetingStatus === "stopping" ? "text-yellow-600" :
+                    meetingStatus === "completed" ? "text-gray-600" :
+                    "text-red-600"
+                  )}>
+                    {meetingStatus}
+                  </span>
                 </div>
               )}
             </>
@@ -693,6 +722,11 @@ export function TranscriptionDisplay({
               <span className="text-xs font-medium">{title || "Meeting Transcript"}</span>
             </>
           )}
+
+          {/* Debug info - temporarily visible */}
+          <div className="text-xs text-gray-500 ml-2">
+            Status: {meetingStatus || 'none'} | WS: {isWebSocketConnected ? 'connected' : 'disconnected'}
+          </div>
 
           {/* Test button to manually trigger WebSocket callback */}
           <button
@@ -771,8 +805,20 @@ export function TranscriptionDisplay({
         >
           {allSegments.length === 0 && !isLoading ? (
             <div className="text-center text-gray-500 py-4">
-              {isLive 
-                ? <TranscriptionCountdown />
+              {isLive
+                ? (meetingStatus === 'requested' ? (
+                    <div className="flex flex-col items-center space-y-3">
+                      <div className="flex items-center gap-2">
+                        <div className="h-3 w-3 bg-blue-500 rounded-full animate-pulse"></div>
+                        <span className="text-sm font-medium text-blue-600">Requesting bot...</span>
+                      </div>
+                      <p className="text-xs text-gray-500 max-w-xs">
+                        Your transcription bot is being requested. It will join the meeting shortly.
+                      </p>
+                    </div>
+                  ) : (
+                    <TranscriptionCountdown />
+                  ))
                 : "No transcript available for this meeting."
               }
             </div>

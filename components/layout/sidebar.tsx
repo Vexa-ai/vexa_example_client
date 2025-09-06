@@ -84,13 +84,67 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
     loadMeetings()
   }, [])
 
+  // Listen for meeting status changes and new meeting creation from TranscriptionDisplay
+  useEffect(() => {
+    const handleMeetingStatusChange = (event: CustomEvent) => {
+      const { meetingId, status } = event.detail;
+      console.log("📡 [SIDEBAR] Received meeting status change:", meetingId, status);
+
+      // Update the meeting status in local state
+      setMeetings(prevMeetings =>
+        prevMeetings.map(meeting => {
+          // Check if this meeting matches the status change
+          // meetingId might be "google_meet/abc-def-ghi" or just the native ID
+          const matchesById = meeting.id === meetingId;
+          const matchesByNativeId = meeting.nativeMeetingId === meetingId;
+
+          // Also check if meetingId contains the platform and native ID
+          const parts = meetingId.split('/');
+          const matchesByParts = parts.length === 2 &&
+            meeting.platform?.toLowerCase().replace('_', '') === parts[0] &&
+            meeting.nativeMeetingId === parts[1];
+
+          if (matchesById || matchesByNativeId || matchesByParts) {
+            console.log("📡 [SIDEBAR] Updating meeting:", meeting.id, "to status:", status);
+            return { ...meeting, status: status };
+          }
+          return meeting;
+        })
+      );
+    };
+
+    const handleMeetingCreated = (event: CustomEvent) => {
+      const { meetingId, platform, nativeMeetingId } = event.detail;
+      console.log("📡 [SIDEBAR] New meeting created:", meetingId, platform, nativeMeetingId);
+
+      // Refresh the meeting list to include the new meeting
+      loadMeetings();
+    };
+
+    window.addEventListener('meetingStatusChange', handleMeetingStatusChange as EventListener);
+    window.addEventListener('meetingCreated', handleMeetingCreated as EventListener);
+
+    return () => {
+      window.removeEventListener('meetingStatusChange', handleMeetingStatusChange as EventListener);
+      window.removeEventListener('meetingCreated', handleMeetingCreated as EventListener);
+    };
+  }, [])
+
   const getStatusIcon = (status: string | undefined) => {
     switch (status) {
       case "active":
         return <Circle className="h-4 w-4 fill-green-500 text-green-500 animate-pulse" />
+      case "requested":
+        return <Circle className="h-4 w-4 fill-blue-500 text-blue-500 animate-pulse" />
+      case "connecting":
+        return <Circle className="h-4 w-4 fill-yellow-500 text-yellow-500 animate-pulse" />
+      case "connected":
+        return <Circle className="h-4 w-4 fill-green-500 text-green-500" />
       case "completed":
       case "stopped":
         return <CheckCircle2 className="h-4 w-4 text-green-500" />
+      case "stopping":
+        return <Circle className="h-4 w-4 fill-yellow-500 text-yellow-500" />
       case "error":
         return <AlertCircle className="h-4 w-4 text-red-500" />
       default:

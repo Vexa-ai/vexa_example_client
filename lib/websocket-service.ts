@@ -15,7 +15,7 @@ export interface TranscriptMutableEvent {
 export interface TranscriptFinalizedEvent {
   type: 'transcript.finalized'
   meeting: { id: number }
-  payload: { 
+  payload: {
     segment?: WebSocketSegment
     segments?: WebSocketSegment[]
     [key: string]: any
@@ -32,10 +32,10 @@ export interface MeetingStatusEvent {
 
 export interface WebSocketSegment {
   id: string
-  text: string
+      text: string
   start_time: number
   end_time: number
-  speaker?: string
+      speaker?: string
   language?: string
 }
 

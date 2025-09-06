@@ -65,15 +65,42 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
     // For now, we'll assume `startTranscription` expects the full cleaned URL
     const cleanUrl = `https://meet.google.com/${match[1]}`;
 
+    // Create a preliminary meeting ID for immediate navigation
+    const preliminaryMeetingId = `google_meet/${match[1]}`;
+
     setIsLoading(true)
+
+    // Navigate immediately to the meeting page
+    console.log("🔄 Navigating immediately to meeting page with ID:", preliminaryMeetingId);
+    onStart(preliminaryMeetingId)
+
     try {
-      // Assuming startTranscription now takes the cleaned URL
+      // Start the transcription in the background
       const { meetingId } = await startTranscription(cleanUrl)
+      console.log("✅ Transcription started successfully with final ID:", meetingId);
+
+      // If the returned meeting ID is different (includes internal ID), update it
+      if (meetingId !== preliminaryMeetingId) {
+        console.log("🔄 Updating meeting ID from preliminary to final:", meetingId);
+        onStart(meetingId)
+      }
+
       toast({
         title: "Transcription Started",
         description: `Meeting ID: ${meetingId}`,
       })
-      onStart(meetingId)
+
+      // Emit event to refresh sidebar meeting list
+      const refreshEvent = new CustomEvent('meetingCreated', {
+        detail: {
+          meetingId: meetingId,
+          platform: 'google_meet',
+          nativeMeetingId: match[1],
+          timestamp: new Date().toISOString()
+        }
+      });
+      window.dispatchEvent(refreshEvent);
+
     } catch (err: any) {
       console.error("Error starting transcription:", err)
       setError(err.message || "Failed to start transcription. Check API Key and URL.")
@@ -175,13 +202,19 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
             </div>
           )}
 
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             className="w-full bg-blue-600 hover:bg-blue-700 transition-colors"
             disabled={isLoading || isStoppingBot || !meetingUrl}
           >
             {isLoading ? "Starting Bot..." : "Add Bot to Meeting"}
           </Button>
+
+          {isLoading && (
+            <p className="text-xs text-muted-foreground text-center mt-2">
+              Navigating to meeting page... The bot will join shortly.
+            </p>
+          )}
         </form>
       </CardContent>
     </Card>
