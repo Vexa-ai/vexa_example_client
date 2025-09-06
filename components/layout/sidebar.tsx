@@ -135,7 +135,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
       case "active":
         return <Circle className="h-4 w-4 fill-green-500 text-green-500 animate-pulse" />
       case "requested":
-        return <Circle className="h-4 w-4 fill-blue-500 text-blue-500 animate-pulse" />
+        return <Circle className="h-4 w-4 fill-green-400 text-green-400 animate-pulse" />
       case "connecting":
         return <Circle className="h-4 w-4 fill-yellow-500 text-yellow-500 animate-pulse" />
       case "connected":

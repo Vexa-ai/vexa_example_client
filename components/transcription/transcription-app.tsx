@@ -21,7 +21,8 @@ export function TranscriptionApp({ user }: TranscriptionAppProps) {
   }
 
   const handleStop = () => {
-    setActiveMeetingId(null)
+    // Keep meeting page visible after stopping the bot
+    // Intentionally do not clear activeMeetingId
   }
 
   return (

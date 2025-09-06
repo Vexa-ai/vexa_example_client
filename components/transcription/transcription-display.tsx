@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { AlertCircle, Loader2, Clock, History, Globe, Search, Timer } from "lucide-react"
+import { AlertCircle, Loader2, Clock, History, Globe, Search, Timer, ChevronDown } from "lucide-react"
 import {
   type TranscriptionData,
   type TranscriptionSegment,
@@ -228,8 +228,69 @@ export function TranscriptionDisplay({
   const retryCount = useRef(0)
   const MAX_RETRIES = 3
   const internalMeetingId = useRef<string | number | null>(null)
+  const stopCompletionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const isStoppingRef = useRef(false)
+  
+  // Smart scroll state management
+  const [isUserScrolling, setIsUserScrolling] = useState(false)
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const lastScrollTopRef = useRef(0)
+  const isNearBottomRef = useRef(true)
 
   const shouldDisplay = !!meetingId
+
+  // Smart scroll management functions
+  const checkIfNearBottom = useCallback(() => {
+    if (!transcriptionRef.current) return false
+    const { scrollTop, scrollHeight, clientHeight } = transcriptionRef.current
+    const threshold = 100 // pixels from bottom
+    return scrollHeight - scrollTop - clientHeight < threshold
+  }, [])
+
+  const handleScroll = useCallback(() => {
+    if (!transcriptionRef.current) return
+    
+    const currentScrollTop = transcriptionRef.current.scrollTop
+    const isScrollingUp = currentScrollTop < lastScrollTopRef.current
+    const isNearBottom = checkIfNearBottom()
+    
+    // Update refs
+    lastScrollTopRef.current = currentScrollTop
+    isNearBottomRef.current = isNearBottom
+    
+    // If user is scrolling up or not near bottom, mark as user scrolling
+    if (isScrollingUp || !isNearBottom) {
+      setIsUserScrolling(true)
+      
+      // Clear existing timeout
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current)
+      }
+      
+      // Set new timeout to reset user scrolling after 5 seconds of inactivity
+      scrollTimeoutRef.current = setTimeout(() => {
+        setIsUserScrolling(false)
+        scrollTimeoutRef.current = null
+      }, 5000)
+    }
+  }, [checkIfNearBottom])
+
+  const scrollToBottom = useCallback(() => {
+    if (transcriptionRef.current && !isUserScrolling) {
+      transcriptionRef.current.scrollTop = transcriptionRef.current.scrollHeight
+    }
+  }, [isUserScrolling])
+
+  const handleScrollToBottomClick = useCallback(() => {
+    if (transcriptionRef.current) {
+      transcriptionRef.current.scrollTop = transcriptionRef.current.scrollHeight
+      setIsUserScrolling(false)
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current)
+        scrollTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   // Text cleaner similar to Python script
   const cleanText = useCallback((text: string | undefined | null): string => {
@@ -518,6 +579,11 @@ export function TranscriptionDisplay({
 
   const handleWebSocketMeetingStatus = useCallback((status: string) => {
     console.log("🟡 [WEBSOCKET] Meeting status changed to:", status);
+    // If stopping was requested, ignore non-terminal status regressions
+    if (isStoppingRef.current && (status === "active" || status === "connected" || status === "requested" || status === "connecting")) {
+      console.log("🟡 [WEBSOCKET] Ignoring non-terminal status due to stopping flow:", status)
+      return
+    }
     setMeetingStatus(status);
     console.log("🟡 [DEBUG] Meeting status updated in state to:", status);
 
@@ -532,12 +598,13 @@ export function TranscriptionDisplay({
     console.log("📡 [TRANSCRIPTION] Emitting meeting status change event:", meetingId, status);
     window.dispatchEvent(meetingStatusEvent);
 
-    if (status !== "active") {
-      // Stop WebSocket when meeting is no longer active
+    // Only stop WebSocket on terminal states
+    if (status === "completed" || status === "failed" || status === "error") {
       if (internalMeetingId.current) {
         stopWebSocketTranscription(internalMeetingId.current);
         setIsWebSocketConnected(false);
       }
+      isStoppingRef.current = false
     }
   }, [meetingId]);
 
@@ -609,6 +676,7 @@ export function TranscriptionDisplay({
     setIsWebSocketConnected(false)
     setMeetingStatus(null)
     userHasSelectedLanguage.current = false
+    isStoppingRef.current = false
     
     if (shouldDisplay && meetingId) {
       // Subscribe to WebSocket immediately upon meeting request
@@ -660,15 +728,39 @@ export function TranscriptionDisplay({
         stopWebSocketTranscription(internalMeetingId.current);
         console.log("Cleaned up WebSocket connection on unmount");
       }
+      
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+        console.log("Cleaned up scroll timeout on unmount");
+      }
+      if (stopCompletionTimeoutRef.current) {
+        clearTimeout(stopCompletionTimeoutRef.current)
+        console.log("Cleaned up stop completion timeout on unmount")
+      }
     }
   }, [shouldDisplay, meetingId, isLive, handleWebSocketTranscriptMutable, handleWebSocketTranscriptFinalized, handleWebSocketMeetingStatus, handleWebSocketError, handleWebSocketConnected, handleWebSocketDisconnected])
 
-  // Scroll to bottom when new segments are added
+  // Add scroll event listener
   useEffect(() => {
-    if (transcriptionRef.current && !highlightedSegmentId && isLive) {
-      transcriptionRef.current.scrollTop = transcriptionRef.current.scrollHeight
+    const scrollElement = transcriptionRef.current
+    if (!scrollElement) return
+
+    scrollElement.addEventListener('scroll', handleScroll, { passive: true })
+    
+    return () => {
+      scrollElement.removeEventListener('scroll', handleScroll)
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current)
+      }
     }
-  }, [allSegments, highlightedSegmentId, isLive])
+  }, [handleScroll])
+
+  // Smart scroll to bottom when new segments are added
+  useEffect(() => {
+    if (!highlightedSegmentId && isLive) {
+      scrollToBottom()
+    }
+  }, [allSegments, highlightedSegmentId, isLive, scrollToBottom])
 
   // Scroll to highlighted segment
   useEffect(() => {
@@ -684,6 +776,8 @@ export function TranscriptionDisplay({
     if (!meetingId || !onStop) return
     try {
       setIsLoading(true)
+      setMeetingStatus("stopping")
+      isStoppingRef.current = true
 
       // Clear polling interval
       if (pollingInterval.current) {
@@ -691,15 +785,15 @@ export function TranscriptionDisplay({
         pollingInterval.current = null
       }
 
-      // Stop WebSocket connection
-      if (internalMeetingId.current) {
-        await stopWebSocketTranscription(internalMeetingId.current);
-        internalMeetingId.current = null;
-        setIsWebSocketConnected(false);
-      }
-
       await stopTranscription(meetingId)
-      onStop()
+      // Fallback: if no terminal WS event arrives, mark as completed after 5s
+      if (stopCompletionTimeoutRef.current) {
+        clearTimeout(stopCompletionTimeoutRef.current)
+      }
+      stopCompletionTimeoutRef.current = setTimeout(() => {
+        setMeetingStatus(prev => (prev === "completed" ? prev : "completed"))
+      }, 5000)
+      // Do not notify parent to avoid collapsing the meeting view
     } catch (err) {
       console.error("Error stopping transcription:", err)
       setError("Failed to stop transcription")
@@ -707,6 +801,20 @@ export function TranscriptionDisplay({
       setIsLoading(false)
     }
   }
+
+  // Close WebSocket when we reach a terminal status (including local fallback)
+  useEffect(() => {
+    if (meetingStatus === "completed" || meetingStatus === "failed" || meetingStatus === "error") {
+      if (stopCompletionTimeoutRef.current) {
+        clearTimeout(stopCompletionTimeoutRef.current)
+        stopCompletionTimeoutRef.current = null
+      }
+      if (internalMeetingId.current) {
+        stopWebSocketTranscription(internalMeetingId.current)
+        setIsWebSocketConnected(false)
+      }
+    }
+  }, [meetingStatus])
 
   const handleHighlightSegment = (segmentId: string) => {
     setHighlightedSegmentId(segmentId)
@@ -846,7 +954,7 @@ export function TranscriptionDisplay({
 
         <div 
           ref={transcriptionRef} 
-          className="flex-1 overflow-y-auto border-t border-gray-200 bg-gray-50 p-2 mt-1"
+          className="flex-1 overflow-y-auto border-t border-gray-200 bg-gray-50 p-2 mt-1 relative"
         >
           {allSegments.length === 0 && !isLoading ? (
             <div className="text-center text-gray-500 py-4">
@@ -894,6 +1002,20 @@ export function TranscriptionDisplay({
                   </div>
                 )
               })}
+            </div>
+          )}
+          
+          {/* Scroll to bottom button */}
+          {isUserScrolling && allSegments.length > 0 && (
+            <div className="sticky bottom-4 right-4 float-right">
+              <Button
+                onClick={handleScrollToBottomClick}
+                size="sm"
+                className="shadow-lg bg-gray-500/70 hover:bg-gray-600/80 text-white rounded-full p-2 h-8 w-8 backdrop-blur-sm"
+                title="Scroll to bottom"
+              >
+                <ChevronDown className="h-4 w-4" />
+              </Button>
             </div>
           )}
         </div>
