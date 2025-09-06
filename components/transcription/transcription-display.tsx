@@ -257,6 +257,45 @@ export function TranscriptionDisplay({
     return at - bt
   }, [])
 
+  // Split long text into chunks without breaking sentences
+  const splitTextIntoSentenceChunks = useCallback((text: string, maxLen: number): string[] => {
+    const normalized = (text || "").trim().replace(/\s+/g, ' ')
+    if (normalized.length <= maxLen) return [normalized]
+
+    // Split into sentences on punctuation boundaries. Keep punctuation.
+    const sentences = normalized.split(/(?<=[.!?])\s+/)
+    if (sentences.length === 1) {
+      // Single long sentence: return as one chunk to avoid breaking the sentence
+      return [normalized]
+    }
+
+    const chunks: string[] = []
+    let current = ''
+    for (const sentence of sentences) {
+      if (current.length === 0) {
+        if (sentence.length > maxLen) {
+          // Sentence itself exceeds limit: do not split it
+          chunks.push(sentence)
+        } else {
+          current = sentence
+        }
+      } else if (current.length + 1 + sentence.length <= maxLen) {
+        current = current + ' ' + sentence
+      } else {
+        chunks.push(current)
+        if (sentence.length > maxLen) {
+          // Sentence exceeds limit: push as is to avoid breaking
+          chunks.push(sentence)
+          current = ''
+        } else {
+          current = sentence
+        }
+      }
+    }
+    if (current.length > 0) chunks.push(current)
+    return chunks
+  }, [])
+
   // Merge utility: key by absolute_start_time; prefer newer updated_at
   const mergeByAbsoluteUtc = useCallback((prev: TranscriptionSegment[], incoming: TranscriptionSegment[]): TranscriptionSegment[] => {
     const map = new Map<string, TranscriptionSegment>()
@@ -353,8 +392,31 @@ export function TranscriptionDisplay({
     }
 
     if (current) groups.push(current)
-    return groups
-  }, [cleanText, compareByAbsoluteUtc, getAbsKey, mutableSegmentIds, newMutableSegmentIds])
+
+    // Split long combinedText into chunks for readability (max 250 chars)
+    const MAX_CHARS = 512
+    const splitGroups: typeof groups = []
+    for (const g of groups) {
+      const chunks = splitTextIntoSentenceChunks(g.combinedText, MAX_CHARS)
+      if (chunks.length <= 1) {
+        splitGroups.push(g)
+      } else {
+        for (const chunk of chunks) {
+          splitGroups.push({
+            speaker: g.speaker,
+            startTime: g.startTime,
+            endTime: g.endTime,
+            combinedText: chunk,
+            segments: g.segments,
+            isMutable: g.isMutable,
+            isHighlighted: g.isHighlighted
+          })
+        }
+      }
+    }
+
+    return splitGroups
+  }, [cleanText, compareByAbsoluteUtc, getAbsKey, mutableSegmentIds, newMutableSegmentIds, splitTextIntoSentenceChunks])
 
   const formatUtcTime = useCallback((utc: string): string => {
     try {
