@@ -29,8 +29,11 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
   const [existingBotInfo, setExistingBotInfo] = useState<{ platform: string; nativeMeetingId: string } | null>(null)
   const { toast } = useToast()
 
-  // Regex to validate and extract Google Meet ID
-  const meetUrlRegex = /^https:\/\/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\?.*)?$/;
+  // Regex to validate Google Meet URLs
+  const googleMeetRegex = /^https:\/\/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\?.*)?$/;
+  
+  // Regex to validate Teams URLs
+  const teamsRegex = /^https:\/\/teams\.live\.com\/meet\/(\d+)(\?p=([^&]+))?/;
 
   if (isCollapsed) {
     return null
@@ -54,19 +57,33 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
 
   const handleStart = async () => {
     setError(null)
-    const match = meetingUrl.trim().match(meetUrlRegex);
+    const trimmedUrl = meetingUrl.trim();
 
-    if (!match || !match[1]) {
-      setError("Invalid Google Meet URL. Please use the format https://meet.google.com/xxx-xxxx-xxx");
+    // Check for Google Meet URL
+    const googleMeetMatch = trimmedUrl.match(googleMeetRegex);
+    const teamsMatch = trimmedUrl.match(teamsRegex);
+
+    let platform: string;
+    let nativeMeetingId: string;
+    let cleanUrl: string;
+    let preliminaryMeetingId: string;
+
+    if (googleMeetMatch && googleMeetMatch[1]) {
+      // Google Meet URL
+      platform = 'google_meet';
+      nativeMeetingId = googleMeetMatch[1];
+      cleanUrl = `https://meet.google.com/${nativeMeetingId}`;
+      preliminaryMeetingId = `google_meet/${nativeMeetingId}`;
+    } else if (teamsMatch && teamsMatch[1]) {
+      // Teams URL
+      platform = 'teams';
+      nativeMeetingId = teamsMatch[1];
+      cleanUrl = trimmedUrl; // Use the full URL for Teams
+      preliminaryMeetingId = `teams/${nativeMeetingId}`;
+    } else {
+      setError("Invalid meeting URL. Please use a valid Google Meet (https://meet.google.com/xxx-xxxx-xxx) or Teams (https://teams.live.com/meet/...) URL.");
       return;
     }
-
-    // Use the extracted meeting code (match[1]) to form the clean URL or pass the code directly
-    // For now, we'll assume `startTranscription` expects the full cleaned URL
-    const cleanUrl = `https://meet.google.com/${match[1]}`;
-
-    // Create a preliminary meeting ID for immediate navigation
-    const preliminaryMeetingId = `google_meet/${match[1]}`;
 
     setIsLoading(true)
 
@@ -76,7 +93,7 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
 
     try {
       // Start the transcription in the background
-      const { meetingId } = await startTranscription(cleanUrl)
+      const { meetingId } = await startTranscription(cleanUrl, language, botName)
       console.log("✅ Transcription started successfully with final ID:", meetingId);
 
       // If the returned meeting ID is different (includes internal ID), update it
@@ -94,8 +111,8 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
       const refreshEvent = new CustomEvent('meetingCreated', {
         detail: {
           meetingId: meetingId,
-          platform: 'google_meet',
-          nativeMeetingId: match[1],
+          platform: platform,
+          nativeMeetingId: nativeMeetingId,
           timestamp: new Date().toISOString()
         }
       });
@@ -118,15 +135,15 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
     <Card className="w-full bg-white shadow-sm border border-slate-200 mb-6">
       <CardHeader className="pb-2">
         <CardTitle className="text-xl">Start Transcription Bot</CardTitle>
-        <CardDescription>Enter a Google Meet URL to add a transcription bot to your meeting</CardDescription>
+        <CardDescription>Enter a Google Meet or Teams URL to add a transcription bot to your meeting</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleStart} className="space-y-5">
           <div className="space-y-2">
-            <Label htmlFor="meeting-url" className="font-medium">Google Meet URL</Label>
+            <Label htmlFor="meeting-url" className="font-medium">Meeting URL</Label>
             <Input
               id="meeting-url"
-              placeholder="https://meet.google.com/xxx-xxxx-xxx"
+              placeholder="https://meet.google.com/xxx-xxxx-xxx or https://teams.live.com/meet/..."
               value={meetingUrl}
               onChange={(e) => {
                 setMeetingUrl(e.target.value)
@@ -136,7 +153,7 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
               required
             />
             <p className="text-xs text-muted-foreground mt-1">
-              Currently, only Google Meet is supported. Support for other platforms is coming soon.
+              Supports Google Meet and Microsoft Teams meetings.
             </p>
           </div>
 

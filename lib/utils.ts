@@ -7,10 +7,10 @@ export function cn(...inputs: ClassValue[]) {
 
 /**
  * Extract meeting ID and platform from URL
- * @param url The meeting URL (e.g., https://meet.google.com/xxx-xxxx-xxx)
- * @returns Object containing platform and nativeMeetingId
+ * @param url The meeting URL (e.g., https://meet.google.com/xxx-xxxx-xxx or https://teams.live.com/meet/9327884808517?p=zCmPHnrCLiXtY5atOp)
+ * @returns Object containing platform, nativeMeetingId, and passcode (for Teams)
  */
-export function parseMeetingUrl(url: string): { platform: string; nativeMeetingId: string } {
+export function parseMeetingUrl(url: string): { platform: string; nativeMeetingId: string; passcode?: string } {
   try {
     const urlObj = new URL(url)
     
@@ -21,10 +21,32 @@ export function parseMeetingUrl(url: string): { platform: string; nativeMeetingI
       return { platform: "google_meet", nativeMeetingId: meetingId }
     }
     
-    // Add support for other platforms here as needed
+    // Handle Microsoft Teams URLs
+    if (urlObj.hostname === "teams.live.com" || urlObj.hostname === "teams.microsoft.com") {
+      // Extract meeting ID from URL path using regex
+      const meetIdMatch = url.match(/\/meet\/(\d+)/)
+      if (!meetIdMatch) {
+        throw new Error("Invalid Teams URL format. Could not extract meeting ID.")
+      }
+      
+      const nativeMeetingId = meetIdMatch[1]
+      
+      // Extract passcode from query parameter if present
+      const passcodeMatch = url.match(/\?p=([^&]+)/)
+      const passcode = passcodeMatch ? passcodeMatch[1] : undefined
+      
+      return { 
+        platform: "teams", 
+        nativeMeetingId,
+        passcode
+      }
+    }
     
-    throw new Error("Unsupported meeting platform. Currently only Google Meet is supported.")
+    throw new Error("Unsupported meeting platform. Currently only Google Meet and Microsoft Teams are supported.")
   } catch (error) {
-    throw new Error("Invalid meeting URL. Please provide a valid Google Meet URL.")
+    if (error instanceof Error) {
+      throw error
+    }
+    throw new Error("Invalid meeting URL. Please provide a valid Google Meet or Teams URL.")
   }
 }

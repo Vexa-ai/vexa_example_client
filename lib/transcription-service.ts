@@ -358,14 +358,19 @@ export async function startTranscription(
   // Real API implementation using Vexa API
   try {
     // Parse the meeting URL to get platform and native meeting ID
-    const { platform, nativeMeetingId } = parseMeetingUrl(meetingUrl)
+    const { platform, nativeMeetingId, passcode } = parseMeetingUrl(meetingUrl)
     
     // Build request payload for /bots endpoint
-    const requestPayload = {
+    const requestPayload: any = {
       platform,
       native_meeting_id: nativeMeetingId,
       bot_name: botName,
       language: language === "auto" ? null : language,
+    }
+
+    // Add passcode for Teams meetings if present
+    if (platform === "teams" && passcode) {
+      requestPayload.passcode = passcode
     }
 
      const response = await fetch(`${getApiBaseUrl()}/bots`, {
