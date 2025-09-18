@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { startTranscription, stopTranscription } from "@/lib/transcription-service"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { parseMeetingUrl } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
@@ -21,8 +21,18 @@ interface StartFormProps {
 
 export function StartForm({ onStart, isCollapsed }: StartFormProps) {
   const [meetingUrl, setMeetingUrl] = useState("")
-  const [language, setLanguage] = useState("auto")
-  const [botName, setBotName] = useState("Vexa")
+  const [language, setLanguage] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('vexa_language') || 'auto'
+    }
+    return 'auto'
+  })
+  const [botName, setBotName] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('vexa_bot_name') || 'Vexa'
+    }
+    return 'Vexa'
+  })
   const [isLoading, setIsLoading] = useState(false)
   const [isStoppingBot, setIsStoppingBot] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -34,6 +44,24 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
   
   // Regex to validate Teams URLs
   const teamsRegex = /^https:\/\/teams\.live\.com\/meet\/(\d+)(\?p=([^&]+))?/;
+
+  useEffect(() => {
+    // Autofocus URL field on mount
+    const el = document.getElementById('meeting-url') as HTMLInputElement | null
+    if (el) el.focus()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('vexa_language', language)
+    }
+  }, [language])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('vexa_bot_name', botName)
+    }
+  }, [botName])
 
   if (isCollapsed) {
     return null
@@ -55,7 +83,10 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
     }
   };
 
-  const handleStart = async () => {
+  const handleStart = async (e?: React.FormEvent) => {
+    if (e) {
+      e.preventDefault()
+    }
     setError(null)
     const trimmedUrl = meetingUrl.trim();
 

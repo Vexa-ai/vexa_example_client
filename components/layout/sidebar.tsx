@@ -31,13 +31,21 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
   const [meetingToDelete, setMeetingToDelete] = useState<Meeting | null>(null)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const loadingRef = useRef(false)
   
   // Memoize the change handler to prevent unnecessary re-renders
   const handleNameChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setEditingName(e.target.value)
   }, [])
 
-  const loadMeetings = async () => {
+  const loadMeetings = useCallback(async (force: boolean = false) => {
+    // Use a ref to track loading state to prevent race conditions
+    if (loadingRef.current && !force) {
+      console.log("🔄 [SIDEBAR] Skipping loadMeetings - already loading")
+      return
+    }
+
+    loadingRef.current = true
     setIsLoading(true)
     setError(null)
     
@@ -47,16 +55,15 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
       // Filter out meetings with "error" status
       const filteredMeetings = fetchedMeetings.filter(meeting => meeting.status !== "error")
       
-      // Sort meetings by startTime (most recent first)
+      // Sort meetings by endTime if available else startTime (most recent first)
       const sortedMeetings = filteredMeetings
         .sort((a, b) => {
-          // Fallback to id comparison if startTime is not available
-          if (!a.startTime) return 1
-          if (!b.startTime) return -1
-          return new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+          const aTime = (a.endTime || a.startTime) ? new Date(a.endTime || a.startTime as string).getTime() : 0
+          const bTime = (b.endTime || b.startTime) ? new Date(b.endTime || b.startTime as string).getTime() : 0
+          return bTime - aTime
         })
 
-      console.log("Fetched meetings:", fetchedMeetings.length, "Filtered out error meetings:", fetchedMeetings.length - filteredMeetings.length)
+      console.log("📊 [SIDEBAR] Fetched meetings:", fetchedMeetings.length, "Filtered out error meetings:", fetchedMeetings.length - filteredMeetings.length)
       
       // If we're currently editing a meeting, preserve the editing state
       // unless the meeting no longer exists
@@ -67,12 +74,13 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
       
       setMeetings(sortedMeetings)
     } catch (err) {
-      console.error("Error fetching meetings:", err)
+      console.error("❌ [SIDEBAR] Error fetching meetings:", err)
       setError("Failed to load meetings")
     } finally {
+      loadingRef.current = false
       setIsLoading(false)
     }
-  }
+  }, [editingMeetingId])
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -117,8 +125,8 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
       const { meetingId, platform, nativeMeetingId } = event.detail;
       console.log("📡 [SIDEBAR] New meeting created:", meetingId, platform, nativeMeetingId);
 
-      // Refresh the meeting list to include the new meeting
-      loadMeetings();
+      // Debounce multiple rapid meeting creation events
+      setTimeout(() => loadMeetings(true), 100);
     };
 
     window.addEventListener('meetingStatusChange', handleMeetingStatusChange as EventListener);
@@ -136,6 +144,10 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
         return <Circle className="h-4 w-4 fill-green-500 text-green-500 animate-pulse" />
       case "requested":
         return <Circle className="h-4 w-4 fill-green-400 text-green-400 animate-pulse" />
+      case "joining":
+        return <Circle className="h-4 w-4 fill-blue-500 text-blue-500 animate-pulse" />
+      case "awaiting_admission":
+        return <Circle className="h-4 w-4 fill-orange-500 text-orange-500 animate-pulse" />
       case "connecting":
         return <Circle className="h-4 w-4 fill-yellow-500 text-yellow-500 animate-pulse" />
       case "connected":
@@ -246,7 +258,13 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
       <div className="p-4">
         <div className="flex justify-between items-center mb-4">
           <Link href="https://vexa.ai" target="_blank" rel="noopener noreferrer">
-            <Image src="/logodark.svg" alt="Vexa Logo" width={30} height={24} />
+            <Image 
+              src="/logodark.svg" 
+              alt="Vexa Logo" 
+              width={30} 
+              height={30}
+              style={{ width: 'auto', height: '30px' }}
+            />
           </Link>
           <div className="flex items-center space-x-2">
             <Link href="https://github.com/Vexa-ai/vexa_example_client" target="_blank" rel="noopener noreferrer" title="Fork me on GitHub">
@@ -295,11 +313,25 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
             ))}
           </div>
         ) : error ? (
-          <div className="text-sm text-red-500 p-2 bg-red-50 rounded">
-            {error}
+          <div className="text-sm text-red-500 p-3 bg-red-50 rounded-lg border border-red-200">
+            <div className="flex items-start space-x-2">
+              <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="font-medium">Failed to load meetings</div>
+                <div className="text-xs text-red-400 mt-1">{error}</div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => loadMeetings(true)}
+                  className="mt-2 h-7 text-xs"
+                >
+                  Try Again
+                </Button>
+              </div>
+            </div>
           </div>
         ) : meetings.length === 0 ? (
-          <div className="text-sm text-gray-500 italic">No meetings found</div>
+          <div className="text-sm text-gray-500 italic p-2">No meetings found</div>
         ) : (
           <div className="space-y-1">
             {meetings.map((meeting) => (
@@ -328,7 +360,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
                           {meeting.name || meeting.title || `Meeting ${meeting.nativeMeetingId || ""}`}
                         </div>
                         <div className="flex items-center space-x-2 text-xs text-gray-500">
-                          <span>{formatDate(meeting.startTime)}</span>
+                          <span>{formatDate(meeting.endTime || meeting.startTime)}</span>
                           {meeting.participants && meeting.participants.length > 0 && (
                             <>
                               <span>•</span>

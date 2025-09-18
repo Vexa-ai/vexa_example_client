@@ -41,7 +41,11 @@ export function ApiKeyModal() {
     return () => clearTimeout(timer);
   }, []);
 
-  const handleSaveKey = () => {
+  const handleSaveKey = (e?: React.FormEvent) => {
+    if (e) {
+      e.preventDefault()
+    }
+    
     // Reset status
     setSaveStatus("idle");
     
@@ -90,7 +94,7 @@ export function ApiKeyModal() {
           </DialogDescription>
         </DialogHeader>
         
-        <div className="grid gap-4 py-4">
+        <form onSubmit={handleSaveKey} className="grid gap-4 py-4">
           <div className="relative">
             <Input
               type={showKey ? "text" : "password"}
@@ -98,6 +102,8 @@ export function ApiKeyModal() {
               value={apiKeyValue}
               onChange={(e) => setApiKeyValue(e.target.value)}
               className="pr-10"
+              required
+              minLength={5}
             />
             <button
               type="button"
@@ -143,16 +149,16 @@ export function ApiKeyModal() {
               </AlertDescription>
             </Alert>
           )}
-        </div>
-        
-        <DialogFooter className="sm:justify-between">
-          <Button variant="outline" onClick={() => setOpen(false)}>
-            Continue Without Key
-          </Button>
-          <Button type="submit" onClick={handleSaveKey}>
-            Save API Key
-          </Button>
-        </DialogFooter>
+          
+          <DialogFooter className="sm:justify-between">
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Continue Without Key
+            </Button>
+            <Button type="submit">
+              Save API Key
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   )

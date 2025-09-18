@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { AlertCircle, Loader2, Clock, History, Globe, Search, Timer, ChevronDown } from "lucide-react"
+import { AlertCircle, Loader2, Clock, History, Globe, Search, Timer, ChevronDown, ExternalLink, Copy } from "lucide-react"
 import {
   type TranscriptionData,
   type TranscriptionSegment,
@@ -27,6 +27,7 @@ import {
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Check } from "lucide-react"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 
 // Language options for the selector sorted by popularity and alphabetically in groups
 const languageOptions = [
@@ -152,48 +153,41 @@ function LanguageSelector({
   )
 }
 
-// Countdown component for waiting screen
-function TranscriptionCountdown() {
-  const [countdown, setCountdown] = useState(10);
-  const [countdownComplete, setCountdownComplete] = useState(false);
-  
-  useEffect(() => {
-    if (countdown <= 0) {
-      setCountdownComplete(true);
-      return;
+// WebSocket status panel (replaces countdown UI)
+function WsStatusPanel({ status }: { status: string | null }) {
+  if (!status) return null
+  const toTitleCase = (str: string) => str.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase())
+  const getUi = () => {
+    switch (status) {
+      case "requested":
+        return { color: "text-blue-500", dot: "bg-blue-400", title: "Request sent", desc: "Provisioning bot…" }
+      case "joining":
+        return { color: "text-blue-500", dot: "bg-blue-400", title: "Joining", desc: "Bot is joining the meeting…" }
+      case "awaiting_admission":
+        return { color: "text-amber-600", dot: "bg-amber-400", title: "Awaiting admission", desc: "Please admit the bot in your meeting" }
+      case "connecting":
+        return { color: "text-amber-600", dot: "bg-amber-300", title: "Joining meeting", desc: "Establishing connection…" }
+      case "connected":
+      case "active":
+        return { color: "text-emerald-600", dot: "bg-emerald-500", title: "Connected", desc: "Receiving live audio…" }
+      case "stopping":
+        return { color: "text-amber-600", dot: "bg-amber-300", title: "Stopping", desc: "Finalizing transcript…" }
+      case "completed":
+        return { color: "text-gray-600", dot: "bg-gray-300", title: "Completed", desc: "Meeting ended" }
+      default:
+        return { color: "text-gray-600", dot: "bg-gray-400", title: toTitleCase(status), desc: "" }
     }
-    
-    const timer = setTimeout(() => {
-      setCountdown(prev => prev - 1);
-    }, 1000);
-    
-    return () => clearTimeout(timer);
-  }, [countdown]);
-  
+  }
+  const ui = getUi()
   return (
-    <div className="text-center py-4 flex flex-col items-center space-y-2">
-      {!countdownComplete ? (
-        <>
-          <div className="flex items-center text-blue-500 mb-1">
-            <Timer className="h-5 w-5 mr-2 animate-pulse" />
-            <span className="font-medium">Connecting bot to meeting</span>
-          </div>
-          <div className="text-gray-500">
-            Please wait <span className="font-semibold text-blue-600">{countdown}</span> seconds...
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="text-green-600 font-medium">
-            The bot is attempting to join your meeting
-          </div>
-          <div className="text-gray-500 text-sm mt-1">
-            Please allow the bot to attend the meeting if prompted
-          </div>
-        </>
-      )}
+    <div className="flex flex-col items-center space-y-2 py-4">
+      <div className="flex items-center gap-2">
+        <div className={`h-3 w-3 rounded-full animate-pulse ${ui.dot}`}></div>
+        <span className={`text-sm font-medium ${ui.color}`}>{ui.title}</span>
+      </div>
+      <div className="text-xs text-gray-500">{ui.desc}</div>
     </div>
-  );
+  )
 }
 
 interface TranscriptionDisplayProps {
@@ -221,13 +215,14 @@ export function TranscriptionDisplay({
   const [isChangingLanguage, setIsChangingLanguage] = useState(false)
   const [isWebSocketConnected, setIsWebSocketConnected] = useState(false)
   const [wsError, setWsError] = useState<string | null>(null)
+  const [showStopDialog, setShowStopDialog] = useState(false)
   const userHasSelectedLanguage = useRef(false)
   const pollingInterval = useRef<NodeJS.Timeout | null>(null)
   const transcriptionRef = useRef<HTMLDivElement>(null)
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const retryCount = useRef(0)
   const MAX_RETRIES = 3
-  const internalMeetingId = useRef<string | number | null>(null)
+  const internalMeetingId = useRef<string | null>(null)
   const stopCompletionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const isStoppingRef = useRef(false)
   
@@ -238,6 +233,21 @@ export function TranscriptionDisplay({
   const isNearBottomRef = useRef(true)
 
   const shouldDisplay = !!meetingId
+
+  // Parse meeting info for actions (Open Meet / Copy)
+  const parsedMeeting = useMemo(() => {
+    if (!meetingId) return { platform: null as null | string, nativeId: null as null | string, meetUrl: null as null | string }
+    const parts = meetingId.split('/')
+    const platform = parts[0] || null
+    const nativeId = parts[1] || null
+    const meetUrl = platform === 'google_meet' && nativeId ? `https://meet.google.com/${nativeId}` : null
+    return { platform, nativeId, meetUrl }
+  }, [meetingId])
+
+  const handleCopy = useCallback(async (text: string | null | undefined) => {
+    if (!text) return
+    try { await navigator.clipboard.writeText(text) } catch { /* no-op */ }
+  }, [])
 
   // Smart scroll management functions
   const checkIfNearBottom = useCallback(() => {
@@ -895,25 +905,29 @@ export function TranscriptionDisplay({
                 <div className="flex items-center gap-1">
                   <div className={cn(
                     "h-2 w-2 rounded-full",
-                    meetingStatus === "active" ? "bg-green-500 animate-pulse" :
-                    meetingStatus === "connected" ? "bg-green-500 animate-pulse" :
-                    meetingStatus === "requested" ? "bg-blue-500 animate-pulse" :
-                    meetingStatus === "connecting" ? "bg-yellow-500 animate-pulse" :
-                    meetingStatus === "stopping" ? "bg-yellow-500" :
-                    meetingStatus === "completed" ? "bg-gray-500" :
+                    meetingStatus === "active" ? "bg-emerald-500 animate-pulse" :
+                    meetingStatus === "connected" ? "bg-emerald-500 animate-pulse" :
+                    meetingStatus === "requested" ? "bg-blue-400 animate-pulse" :
+                    meetingStatus === "joining" ? "bg-blue-400 animate-pulse" :
+                    meetingStatus === "awaiting_admission" ? "bg-amber-400 animate-pulse" :
+                    meetingStatus === "connecting" ? "bg-amber-300 animate-pulse" :
+                    meetingStatus === "stopping" ? "bg-amber-300" :
+                    meetingStatus === "completed" ? "bg-gray-300" :
                     "bg-red-500"
                   )}></div>
                   <span className={cn(
                     "text-xs font-medium capitalize",
-                    meetingStatus === "active" ? "text-green-600" :
-                    meetingStatus === "connected" ? "text-green-600" :
+                    meetingStatus === "active" ? "text-emerald-600" :
+                    meetingStatus === "connected" ? "text-emerald-600" :
                     meetingStatus === "requested" ? "text-blue-600" :
-                    meetingStatus === "connecting" ? "text-yellow-600" :
-                    meetingStatus === "stopping" ? "text-yellow-600" :
+                    meetingStatus === "joining" ? "text-blue-600" :
+                    meetingStatus === "awaiting_admission" ? "text-amber-600" :
+                    meetingStatus === "connecting" ? "text-amber-600" :
+                    meetingStatus === "stopping" ? "text-amber-600" :
                     meetingStatus === "completed" ? "text-gray-600" :
                     "text-red-600"
                   )}>
-                    {meetingStatus}
+                    {meetingStatus.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase())}
                   </span>
                 </div>
               )}
@@ -937,6 +951,18 @@ export function TranscriptionDisplay({
               />
             </div>
           )}
+          {parsedMeeting.meetUrl && (
+            <a href={parsedMeeting.meetUrl} target="_blank" rel="noopener noreferrer">
+              <Button size="sm" variant="outline" className="h-7 text-xs py-0 px-2">
+                <ExternalLink className="h-3 w-3 mr-1" /> Open Meet
+              </Button>
+            </a>
+          )}
+          {parsedMeeting.nativeId && (
+            <Button onClick={() => handleCopy(parsedMeeting.nativeId!)} size="sm" variant="outline" className="h-7 text-xs py-0 px-2">
+              <Copy className="h-3 w-3 mr-1" /> Copy ID
+            </Button>
+          )}
           {meetingId && (
             <DownloadTranscript
               segments={allSegments}
@@ -944,10 +970,32 @@ export function TranscriptionDisplay({
               disabled={allSegments.length === 0 || isLoading}
             />
           )}
-          {isLive && onStop && (
-            <Button onClick={handleStop} variant="destructive" size="sm" className="h-7 text-xs py-0 px-2" disabled={isLoading}>
-              {isLoading ? "Stopping..." : "Stop Bot"}
-            </Button>
+          {isLive && onStop && meetingStatus !== "completed" && meetingStatus !== "stopped" && meetingStatus !== "failed" && meetingStatus !== "error" && (
+            <>
+              <Button
+                onClick={() => setShowStopDialog(true)}
+                variant="destructive"
+                size="sm"
+                className="h-7 text-xs py-0 px-2"
+                disabled={meetingStatus === "stopping"}
+              >
+                {meetingStatus === "stopping" ? "Stopping..." : "Stop Bot"}
+              </Button>
+              <AlertDialog open={showStopDialog} onOpenChange={setShowStopDialog}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Stop transcription</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to stop the transcription bot for this meeting?
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => { setShowStopDialog(false); handleStop(); }} className="bg-red-600 hover:bg-red-700">Stop</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </>
           )}
         </div>
       </CardHeader>
@@ -987,19 +1035,7 @@ export function TranscriptionDisplay({
           {allSegments.length === 0 && !isLoading ? (
             <div className="text-center text-gray-500 py-4">
               {isLive
-                ? (meetingStatus === 'requested' ? (
-                    <div className="flex flex-col items-center space-y-3">
-                      <div className="flex items-center gap-2">
-                        <div className="h-3 w-3 bg-blue-500 rounded-full animate-pulse"></div>
-                        <span className="text-sm font-medium text-blue-600">Requesting bot...</span>
-                      </div>
-                      <p className="text-xs text-gray-500 max-w-xs">
-                        Your transcription bot is being requested. It will join the meeting shortly.
-                      </p>
-                    </div>
-                  ) : (
-                    <TranscriptionCountdown />
-                  ))
+                ? (<WsStatusPanel status={meetingStatus} />)
                 : "No transcript available for this meeting."
               }
             </div>

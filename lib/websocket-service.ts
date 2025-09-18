@@ -323,7 +323,8 @@ export class TranscriptionWebSocketService {
     const meetingKey = `native:${meeting.platform}:${meeting.native_id}`
     this.subscribedMeetings.add(meetingKey)
 
-    const meetingsPayload = [{ platform: meeting.platform, native_id: meeting.native_id }]
+    // Send both keys for compatibility with server variants
+    const meetingsPayload = [{ platform: meeting.platform, native_id: meeting.native_id, native_meeting_id: meeting.native_id }]
 
     const message = {
       action: 'subscribe',
@@ -343,7 +344,8 @@ export class TranscriptionWebSocketService {
     this.subscribedMeetings.delete(meetingKey)
     
     if (this.isConnected()) {
-      const meetingsPayload = [{ platform: meeting.platform, native_id: meeting.native_id }]
+      // Send both keys for compatibility with server variants
+      const meetingsPayload = [{ platform: meeting.platform, native_id: meeting.native_id, native_meeting_id: meeting.native_id }]
 
       const message = {
         action: 'unsubscribe',
