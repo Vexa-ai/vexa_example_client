@@ -284,6 +284,14 @@ export class TranscriptionWebSocketService {
 
   private handleError(event: WebSocketErrorEvent): void {
     console.error("WebSocket error details:", event.error)
+    
+    // Handle specific error types
+    if (event.error === "invalid_unsubscribe_payload") {
+      console.warn("🔴 [WEBSOCKET SERVICE] Invalid unsubscribe payload - this may be a server-side validation issue")
+      // Don't propagate this specific error to avoid breaking the UI
+      return
+    }
+    
     this.onError?.(event)
   }
 
@@ -342,8 +350,14 @@ export class TranscriptionWebSocketService {
         meetings: meetingsPayload
       }
 
-      this.ws?.send(JSON.stringify(message))
-      console.log("🔌 [WEBSOCKET SERVICE] Unsubscribed from meeting:", meetingsPayload)
+      console.log("🔌 [WEBSOCKET SERVICE] Sending unsubscribe message:", JSON.stringify(message))
+      try {
+        this.ws?.send(JSON.stringify(message))
+        console.log("🔌 [WEBSOCKET SERVICE] Unsubscribed from meeting:", meetingsPayload)
+      } catch (error) {
+        console.error("🔴 [WEBSOCKET SERVICE] Error sending unsubscribe message:", error)
+        this.handleError({ type: 'error', error: `Failed to unsubscribe: ${error}` })
+      }
     }
   }
 

@@ -700,9 +700,8 @@ export function TranscriptionDisplay({
             handleWebSocketConnected,
             handleWebSocketDisconnected
           )
-          internalMeetingId.current = internalId != null && !Number.isNaN(internalId)
-            ? internalId
-            : `${platform}/${nativeId}`
+          // Always store in platform/native_id format for consistent WebSocket unsubscription
+          internalMeetingId.current = `${platform}/${nativeId}`
 
           console.log("🟢 [WEBSOCKET] Subscribed:", internalMeetingId.current)
         } catch (err) {
