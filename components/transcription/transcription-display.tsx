@@ -690,11 +690,9 @@ export function TranscriptionDisplay({
           const nativeId = parts[1] || meetingId
           const internalId = parts.length >= 3 ? Number(parts[2]) : null
 
-          // Start WS – subscribe using internal id if present, else platform/native
+          // Start WS – always use platform/native format since server only accepts this
           await startWebSocketTranscription(
-            internalId != null && !Number.isNaN(internalId)
-              ? internalId
-              : ({ platform, native_id: nativeId } as any),
+            { platform, native_id: nativeId },
             handleWebSocketTranscriptMutable,
             handleWebSocketTranscriptFinalized,
             handleWebSocketMeetingStatus,

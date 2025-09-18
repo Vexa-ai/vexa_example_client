@@ -974,7 +974,7 @@ export async function deleteMeeting(meetingId: string): Promise<{ success: boole
  * @param onDisconnected Callback when WebSocket disconnects
  */
 export async function startWebSocketTranscription(
-  meetingId: string | number,
+  meetingId: string | { platform: string; native_id: string },
   onTranscriptMutable: (segments: TranscriptionSegment[]) => void,
   onTranscriptFinalized: (segments: TranscriptionSegment[]) => void,
   onMeetingStatus: (status: string) => void,
@@ -983,6 +983,9 @@ export async function startWebSocketTranscription(
   onDisconnected: () => void
 ): Promise<void> {
   const wsService = getWebSocketService()
+
+  // Convert meetingId to the format needed for segment conversion
+  const meetingIdString = typeof meetingId === 'string' ? meetingId : `${meetingId.platform}/${meetingId.native_id}`
 
   // Set up event handlers
   wsService.setOnTranscriptMutable((event: TranscriptMutableEvent) => {
@@ -997,7 +1000,7 @@ export async function startWebSocketTranscription(
         
         // Convert each segment in the array
         const convertedSegments = event.payload.segments.map((segmentData: any) => {
-          return convertWebSocketSegment(segmentData, meetingId.toString());
+          return convertWebSocketSegment(segmentData, meetingIdString);
         });
         
         console.log("🟢 [TRANSCRIPTION SERVICE] Converted", convertedSegments.length, "segments");
@@ -1100,18 +1103,47 @@ export async function startWebSocketTranscription(
 
   // Connect and subscribe
   await wsService.connect()
-  await wsService.subscribeToMeeting(meetingId)
+  
+  // Convert meetingId to platform/native_id format if it's a string
+  let subscriptionMeeting: { platform: string; native_id: string }
+  if (typeof meetingId === 'string') {
+    // Parse string format "platform/native_id" or "platform/native_id/internal_id"
+    const parts = meetingId.split('/')
+    if (parts.length < 2) {
+      throw new Error("Invalid meeting ID format for WebSocket subscription. Expected format: 'platform/native_id'")
+    }
+    subscriptionMeeting = { platform: parts[0], native_id: parts[1] }
+  } else {
+    // Already in correct format
+    subscriptionMeeting = meetingId
+  }
+  
+  await wsService.subscribeToMeeting(subscriptionMeeting)
 }
 
 /**
  * Stop WebSocket connection for a meeting
- * @param meetingId The internal meeting ID to unsubscribe from
+ * @param meetingId The meeting ID to unsubscribe from
  */
-export async function stopWebSocketTranscription(meetingId: string | number): Promise<void> {
+export async function stopWebSocketTranscription(meetingId: string | { platform: string; native_id: string }): Promise<void> {
   const wsService = getWebSocketService()
   
   if (wsService.isConnected()) {
-    await wsService.unsubscribeFromMeeting(meetingId)
+    // Convert meetingId to platform/native_id format if it's a string
+    let subscriptionMeeting: { platform: string; native_id: string }
+    if (typeof meetingId === 'string') {
+      // Parse string format "platform/native_id" or "platform/native_id/internal_id"
+      const parts = meetingId.split('/')
+      if (parts.length < 2) {
+        throw new Error("Invalid meeting ID format for WebSocket unsubscription. Expected format: 'platform/native_id'")
+      }
+      subscriptionMeeting = { platform: parts[0], native_id: parts[1] }
+    } else {
+      // Already in correct format
+      subscriptionMeeting = meetingId
+    }
+    
+    await wsService.unsubscribeFromMeeting(subscriptionMeeting)
   }
   
   // If no more meetings are subscribed, disconnect

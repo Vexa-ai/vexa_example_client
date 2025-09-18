@@ -287,7 +287,7 @@ export class TranscriptionWebSocketService {
     this.onError?.(event)
   }
 
-  public async subscribeToMeeting(meeting: string | number | { platform: string; native_id: string }): Promise<void> {
+  public async subscribeToMeeting(meeting: { platform: string; native_id: string }): Promise<void> {
     if (!this.isConnected()) {
       console.log("🔌 [WEBSOCKET SERVICE] WebSocket not connected, connecting...")
       await this.connect()
@@ -312,23 +312,14 @@ export class TranscriptionWebSocketService {
       })
     }
 
-    const meetingKey =
-      typeof meeting === 'number'
-        ? `id:${meeting}`
-        : typeof meeting === 'string'
-          ? `id:${meeting}`
-          : `native:${meeting.platform}:${meeting.native_id}`
+    const meetingKey = `native:${meeting.platform}:${meeting.native_id}`
     this.subscribedMeetings.add(meetingKey)
 
-    const meetingsPayload =
-      typeof meeting === 'number' || typeof meeting === 'string'
-        ? [{ id: meeting }]
-        : [{ platform: meeting.platform, native_id: meeting.native_id }]
+    const meetingsPayload = [{ platform: meeting.platform, native_id: meeting.native_id }]
 
     const message = {
       action: 'subscribe',
-      meetings: meetingsPayload,
-      include_full: true
+      meetings: meetingsPayload
     }
 
     console.log("🔌 [WEBSOCKET SERVICE] WebSocket ready, sending subscription message")
@@ -339,20 +330,12 @@ export class TranscriptionWebSocketService {
     await new Promise(resolve => setTimeout(resolve, 1000))
   }
 
-  public async unsubscribeFromMeeting(meeting: string | number | { platform: string; native_id: string }): Promise<void> {
-    const meetingKey =
-      typeof meeting === 'number'
-        ? `id:${meeting}`
-        : typeof meeting === 'string'
-          ? `id:${meeting}`
-          : `native:${meeting.platform}:${meeting.native_id}`
+  public async unsubscribeFromMeeting(meeting: { platform: string; native_id: string }): Promise<void> {
+    const meetingKey = `native:${meeting.platform}:${meeting.native_id}`
     this.subscribedMeetings.delete(meetingKey)
     
     if (this.isConnected()) {
-      const meetingsPayload =
-        typeof meeting === 'number' || typeof meeting === 'string'
-          ? [{ id: meeting }]
-          : [{ platform: meeting.platform, native_id: meeting.native_id }]
+      const meetingsPayload = [{ platform: meeting.platform, native_id: meeting.native_id }]
 
       const message = {
         action: 'unsubscribe',
