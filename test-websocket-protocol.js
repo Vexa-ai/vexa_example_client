@@ -33,15 +33,15 @@ async function testWebSocketProtocol() {
       ws.send(JSON.stringify({ action: 'ping' }));
       console.log('   📤 Sent ping');
       
-      // Then subscribe to meeting 251
+      // Then subscribe to meeting using correct format
       setTimeout(() => {
         const subscribeMessage = {
           action: 'subscribe',
-          meetings: [{ id: 251 }]
+          meetings: [{ platform: 'google_meet', native_id: 'kzj-grsa-cqf' }]
         };
         
         ws.send(JSON.stringify(subscribeMessage));
-        console.log('   📤 Sent subscription for meeting 251');
+        console.log('   📤 Sent subscription for google_meet/kzj-grsa-cqf');
       }, 1000);
     };
     

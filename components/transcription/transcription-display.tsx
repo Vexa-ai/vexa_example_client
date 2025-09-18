@@ -679,39 +679,70 @@ export function TranscriptionDisplay({
     isStoppingRef.current = false
     
     if (shouldDisplay && meetingId) {
-      // Subscribe to WebSocket immediately upon meeting request
-      const initializeWs = async () => {
-        try {
-          setIsLoading(true)
+      if (isLive) {
+        // Live mode: Subscribe to WebSocket immediately upon meeting request
+        const initializeWs = async () => {
+          try {
+            setIsLoading(true)
 
-          // Prefer internal meeting id when present: platform/native_id/internalId
-          const parts = meetingId.split('/')
-          const platform = parts[0] || 'google_meet'
-          const nativeId = parts[1] || meetingId
-          const internalId = parts.length >= 3 ? Number(parts[2]) : null
+            // Prefer internal meeting id when present: platform/native_id/internalId
+            const parts = meetingId.split('/')
+            const platform = parts[0] || 'google_meet'
+            const nativeId = parts[1] || meetingId
+            const internalId = parts.length >= 3 ? Number(parts[2]) : null
 
-          // Start WS – always use platform/native format since server only accepts this
-          await startWebSocketTranscription(
-            { platform, native_id: nativeId },
-            handleWebSocketTranscriptMutable,
-            handleWebSocketTranscriptFinalized,
-            handleWebSocketMeetingStatus,
-            handleWebSocketError,
-            handleWebSocketConnected,
-            handleWebSocketDisconnected
-          )
-          // Always store in platform/native_id format for consistent WebSocket unsubscription
-          internalMeetingId.current = `${platform}/${nativeId}`
+            // Start WS – always use platform/native format since server only accepts this
+            await startWebSocketTranscription(
+              { platform, native_id: nativeId },
+              handleWebSocketTranscriptMutable,
+              handleWebSocketTranscriptFinalized,
+              handleWebSocketMeetingStatus,
+              handleWebSocketError,
+              handleWebSocketConnected,
+              handleWebSocketDisconnected
+            )
+            // Always store in platform/native_id format for consistent WebSocket unsubscription
+            internalMeetingId.current = `${platform}/${nativeId}`
 
-          console.log("🟢 [WEBSOCKET] Subscribed:", internalMeetingId.current)
-        } catch (err) {
-          console.error("Error initializing websocket:", err)
-          setError("Failed to start WebSocket")
-        } finally {
-          setIsLoading(false)
+            console.log("🟢 [WEBSOCKET] Subscribed:", internalMeetingId.current)
+          } catch (err) {
+            console.error("Error initializing websocket:", err)
+            setError("Failed to start WebSocket")
+          } finally {
+            setIsLoading(false)
+          }
         }
+        initializeWs()
+      } else {
+        // Historical mode: Fetch transcript data via REST API
+        const loadHistoricalTranscript = async () => {
+          try {
+            setIsLoading(true)
+            console.log("📚 [HISTORICAL] Loading historical transcript for:", meetingId)
+            
+            // Import getMeetingTranscript here to avoid circular dependencies
+            const { getMeetingTranscript } = await import("@/lib/transcription-service")
+            const transcriptData = await getMeetingTranscript(meetingId)
+            
+            console.log("📚 [HISTORICAL] Loaded transcript with", transcriptData.segments.length, "segments")
+            
+            // Set the segments directly (no WebSocket updates for historical data)
+            setAllSegments(transcriptData.segments)
+            setTranscription(transcriptData)
+            setSelectedLanguage(transcriptData.language || "auto")
+            
+            // Historical transcripts are always completed/finalized
+            setMeetingStatus("completed")
+            
+          } catch (err) {
+            console.error("📚 [HISTORICAL] Error loading historical transcript:", err)
+            setError("Failed to load historical transcript")
+          } finally {
+            setIsLoading(false)
+          }
+        }
+        loadHistoricalTranscript()
       }
-      initializeWs()
     }
 
     // Clean up interval and WebSocket when component unmounts

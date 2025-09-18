@@ -140,7 +140,7 @@ async function monitorWebSocket() {
         // Subscribe to meeting
         const subscribeMsg = {
           action: 'subscribe',
-          meetings: [{ id: 'kzj-grsa-cqf' }] // Use native meeting ID directly
+          meetings: [{ platform: 'google_meet', native_id: 'kzj-grsa-cqf' }] // Use correct format
         };
 
         ws.send(JSON.stringify(subscribeMsg));
