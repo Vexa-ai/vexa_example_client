@@ -274,8 +274,12 @@ export class TranscriptionWebSocketService {
         case "error":
           this.onError?.(data as ErrorEvent)
           break
-        default:
-          console.warn("Unknown WebSocket event type:", data.type)
+        default: {
+          // Use a type assertion to handle unknown event types
+          const unknownEvent = data as { type?: string }
+          console.warn("Unknown WebSocket event type:", unknownEvent.type || 'unknown')
+          break
+        }
       }
     } catch (error) {
       console.error("Failed to parse WebSocket message:", error)
@@ -328,6 +332,12 @@ export class TranscriptionWebSocketService {
 let wsServiceInstance: TranscriptionWebSocketService | null = null
 
 export function getWebSocketService(): TranscriptionWebSocketService {
+  if (process.env.NEXT_PUBLIC_MOCK_MODE === 'true') {
+    console.log('Using mock WebSocket service')
+    // @ts-ignore - Mock service has a compatible interface
+    return new (require('./mock-websocket-service').MockWebSocketService)()
+  }
+  
   if (!wsServiceInstance) {
     wsServiceInstance = new TranscriptionWebSocketService()
   }
