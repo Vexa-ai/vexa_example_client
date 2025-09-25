@@ -253,15 +253,47 @@ export class TranscriptionWebSocketService {
   private handleMessage(event: MessageEvent): void {
     try {
       const data: AnyWebSocketEvent = JSON.parse(event.data)
-      console.log("WebSocket message received:", data.type)
+      console.log("WebSocket message received:", data.type, data)
 
       switch (data.type) {
-        case "transcript.mutable":
-          this.onTranscriptMutable?.(data as TranscriptMutableEvent)
+        case "transcript.mutable": {
+          const eventData = data as TranscriptMutableEvent
+          // Ensure we have segments in the payload
+          if (eventData.payload?.segments?.length) {
+            // Process each segment
+            const processedSegments = eventData.payload.segments.map(segment => ({
+              ...segment,
+              meetingId: eventData.meeting.id,
+              timestamp: new Date().toISOString()
+            }))
+            
+            // Call the handler with properly typed data
+            this.onTranscriptMutable?.({
+              ...eventData,
+              payload: {
+                segments: processedSegments
+              }
+            })
+          }
           break
-        case "transcript.finalized":
-          this.onTranscriptFinalized?.(data as TranscriptFinalizedEvent)
+        }
+        case "transcript.finalized": {
+          const eventData = data as TranscriptFinalizedEvent
+          // Process finalized segments if needed
+          if (eventData.payload?.segments?.length) {
+            this.onTranscriptFinalized?.({
+              ...eventData,
+              payload: {
+                segments: eventData.payload.segments.map(segment => ({
+                  ...segment,
+                  meetingId: eventData.meeting.id,
+                  timestamp: new Date().toISOString()
+                }))
+              }
+            })
+          }
           break
+        }
         case "meeting.status":
           this.onMeetingStatus?.(data as MeetingStatusEvent)
           break

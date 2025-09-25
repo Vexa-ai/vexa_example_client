@@ -3,6 +3,7 @@ import "./globals.css"
 import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import { ThemeProvider } from "@/components/theme-provider"
+import { WebSocketProvider } from "@/components/providers/websocket-provider"
 import { cn } from "@/lib/utils"
 
 const inter = Inter({ subsets: ["latin"] })
@@ -25,7 +26,9 @@ export default function RootLayout({
       </head>
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} disableTransitionOnChange>
-          {children}
+          <WebSocketProvider>
+            {children}
+          </WebSocketProvider>
         </ThemeProvider>
       </body>
     </html>
