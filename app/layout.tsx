@@ -24,7 +24,7 @@ export default function RootLayout({
         <link rel="icon" href="/logodark.svg" type="image/svg+xml" />
       </head>
       <body className={inter.className}>
-        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} disableTransitionOnChange>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem={true} disableTransitionOnChange>
           {children}
         </ThemeProvider>
       </body>

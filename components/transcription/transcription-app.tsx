@@ -27,12 +27,12 @@ export function TranscriptionApp({ user }: TranscriptionAppProps) {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
-      <Card className="border border-slate-200">
+      <Card className="border">
         <CardContent className="p-6">
           <div className="flex justify-between items-center mb-6">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold">Meeting Transcription</h1>
-              <Badge variant="outline" className="bg-yellow-100 text-yellow-800">
+              <Badge variant="outline">
                 Demo Mode
               </Badge>
             </div>

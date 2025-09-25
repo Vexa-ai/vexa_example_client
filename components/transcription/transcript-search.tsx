@@ -79,7 +79,12 @@ export function TranscriptSearch({ segments, onHighlight }: TranscriptSearchProp
     <div className="flex flex-col space-y-2">
       <form onSubmit={handleSearch} className="flex w-full items-center space-x-2">
         <div className="relative flex-1">
-          <Input ref={inputRef} placeholder="Search transcript..." defaultValue={searchTerm} className="pr-8" />
+          <Input 
+            ref={inputRef} 
+            placeholder="Search transcript..." 
+            defaultValue={searchTerm} 
+            className="pr-8 focus:ring-2 focus:ring-ring focus:ring-offset-0" 
+          />
           {searchTerm && (
             <button
               type="button"

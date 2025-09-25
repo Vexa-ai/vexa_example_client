@@ -185,7 +185,7 @@ function WsStatusPanel({ status }: { status: string | null }) {
         <div className={`h-3 w-3 rounded-full animate-pulse ${ui.dot}`}></div>
         <span className={`text-sm font-medium ${ui.color}`}>{ui.title}</span>
       </div>
-      <div className="text-xs text-gray-500">{ui.desc}</div>
+      <div className="text-xs text-muted-foreground">{ui.desc}</div>
     </div>
   )
 }
@@ -941,7 +941,7 @@ export function TranscriptionDisplay({
           )}
 
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           {isLive && (
             <div className="flex items-center mr-1">
               <LanguageSelector
@@ -1024,23 +1024,23 @@ export function TranscriptionDisplay({
 
         {isLoading && !isLive && allSegments.length === 0 && (
           <div className="flex justify-center items-center flex-1">
-            <Loader2 className="h-6 w-6 animate-spin text-gray-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         )}
 
         <div 
           ref={transcriptionRef} 
-          className="flex-1 overflow-y-auto border-t border-gray-200 bg-gray-50 p-2 mt-1 relative"
+          className="flex-1 overflow-y-auto border-t border-border bg-muted/30 p-4 mt-1 relative rounded-md ring-1 ring-border/50"
         >
           {allSegments.length === 0 && !isLoading ? (
-            <div className="text-center text-gray-500 py-4">
+            <div className="text-center text-muted-foreground py-4">
               {isLive
                 ? (<WsStatusPanel status={meetingStatus} />)
                 : "No transcript available for this meeting."
               }
             </div>
           ) : (
-            <div className="space-y-1 font-light text-gray-800 pb-10">
+            <div className="space-y-2 font-light text-foreground pb-10 max-w-3xl mx-auto px-2 md:px-4">
               {groupSegmentsBySpeaker(allSegments).map((group, idx) => {
                 const groupKey = `${group.speaker}-${group.startTime}-${idx}`
                 // No highlighting or special styling for active/mutable segments
@@ -1049,17 +1049,17 @@ export function TranscriptionDisplay({
                     key={groupKey}
                     ref={el => { segmentRefs.current[groupKey] = el; }}
                     className={cn(
-                      "px-2 py-1 transition-colors border-l-2 hover:bg-gray-100 border-l-gray-200"
+                      "px-3 py-2 transition-colors border-l-2 hover:bg-accent/40 active:bg-accent/50 border-l-border rounded-r-md"
                     )}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1">
                         {group.speaker && group.speaker !== "Unknown" && (
-                          <p className="text-xs font-semibold text-gray-600">{group.speaker}</p>
+                          <p className="text-xs font-medium text-muted-foreground/90 mb-1">{group.speaker}</p>
                         )}
                         <p className="text-sm leading-relaxed">{group.combinedText}</p>
                       </div>
-                      <span className="text-xs text-gray-500 whitespace-nowrap ml-1 flex-shrink-0">
+                      <span className="text-xs font-mono text-muted-foreground/80 tracking-tight whitespace-nowrap ml-1 flex-shrink-0">
                         {formatUtcTime(group.startTime)}
                       </span>
                     </div>

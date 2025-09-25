@@ -67,7 +67,7 @@ export function AppLayout({ user }: AppLayoutProps) {
   }, [])
 
   return (
-    <div className="flex h-screen overflow-hidden bg-white relative">
+    <div className="flex h-screen overflow-hidden bg-background relative">
       {/* Mobile sidebar toggle button */}
       <Button 
         variant="ghost" 
@@ -103,7 +103,7 @@ export function AppLayout({ user }: AppLayoutProps) {
           className={`
             absolute top-1/2 -translate-y-1/2 hidden md:flex
             ${sidebarOpen ? 'right-0 translate-x-1/2' : 'left-0 translate-x-1/2'}
-            z-30 h-8 w-8 rounded-full bg-gray-100 shadow-md border border-gray-200
+            z-30 h-8 w-8 rounded-full bg-muted shadow-sm border border-border
           `}
         >
           {sidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -112,10 +112,10 @@ export function AppLayout({ user }: AppLayoutProps) {
       
       {/* Main content area that expands when sidebar is collapsed */}
       <div className={`
-        flex-1 overflow-hidden flex flex-col p-2 transition-all
-        ${!sidebarOpen ? 'md:pl-4' : ''}
+        flex-1 overflow-hidden flex flex-col p-4 transition-all bg-background
+        ${!sidebarOpen ? 'md:pl-6' : ''}
       `}>
-        <div className="max-w-4xl w-full mx-auto flex-1 flex flex-col h-full">
+        <div className="max-w-4xl w-full mx-auto flex-1 flex flex-col h-full rounded-lg border border-border bg-card shadow-sm">
           {!sidebarOpen && (
             <div className="mb-1 flex justify-end">
               <Button 

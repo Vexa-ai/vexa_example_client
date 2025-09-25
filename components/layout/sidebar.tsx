@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { useRouter } from "next/navigation"
 import { PlusCircle, RefreshCw, Circle, CheckCircle2, AlertCircle, MoreVertical, Settings, Edit2, Trash2, Users, Check, X } from "lucide-react"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Meeting, getMeetingHistory, updateMeetingData, deleteMeeting } from "@/lib/transcription-service"
 import { cn } from "@/lib/utils"
@@ -254,7 +255,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
   }
 
   return (
-    <div className="h-full w-full border-r border-gray-200 bg-gray-50 flex flex-col">
+    <div className="h-full w-full border-r border-border bg-card flex flex-col">
       <div className="p-4">
         <div className="flex justify-between items-center mb-4">
           <Link href="https://vexa.ai" target="_blank" rel="noopener noreferrer">
@@ -270,6 +271,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
             <Link href="https://github.com/Vexa-ai/vexa_example_client" target="_blank" rel="noopener noreferrer" title="Fork me on GitHub">
               <Image src="/icons8-github.svg" alt="GitHub Logo" width={30} height={30} />
             </Link>
+            <ThemeToggle />
             <Link href="/settings">
               <Button variant="ghost" size="icon" className="h-8 w-8" title="API Settings">
                 <Settings className="h-4 w-4" />
@@ -286,7 +288,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
         </div>
         
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-medium text-gray-500">Meeting History</h3>
+          <h3 className="text-sm font-medium text-muted-foreground">Meeting History</h3>
           <Button 
             variant="ghost" 
             size="icon" 
@@ -313,12 +315,12 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
             ))}
           </div>
         ) : error ? (
-          <div className="text-sm text-red-500 p-3 bg-red-50 rounded-lg border border-red-200">
+          <div className="text-sm text-destructive p-3 bg-destructive/10 rounded-lg border border-destructive/20">
             <div className="flex items-start space-x-2">
-              <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
+              <AlertCircle className="h-4 w-4 text-destructive mt-0.5 flex-shrink-0" />
               <div>
                 <div className="font-medium">Failed to load meetings</div>
-                <div className="text-xs text-red-400 mt-1">{error}</div>
+                <div className="text-xs text-destructive/70 mt-1">{error}</div>
                 <Button
                   variant="outline"
                   size="sm"
@@ -331,7 +333,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
             </div>
           </div>
         ) : meetings.length === 0 ? (
-          <div className="text-sm text-gray-500 italic p-2">No meetings found</div>
+          <div className="text-sm text-muted-foreground italic p-2">No meetings found</div>
         ) : (
           <div className="space-y-1">
             {meetings.map((meeting) => (
@@ -340,8 +342,8 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
                 onClick={() => editingMeetingId !== meeting.id && onSelectMeeting(meeting)}
                 className={cn(
                   "flex items-center justify-between p-2 rounded-md transition-colors",
-                  editingMeetingId !== meeting.id && "cursor-pointer hover:bg-gray-200",
-                  selectedMeetingId === meeting.id && "bg-gray-200"
+                  editingMeetingId !== meeting.id && "cursor-pointer hover:bg-accent/20",
+                  selectedMeetingId === meeting.id && "bg-accent/30"
                 )}
               >
                 <div className="flex items-center space-x-2 overflow-hidden flex-1 min-w-0">
@@ -359,7 +361,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
                         <div className="text-sm font-medium truncate">
                           {meeting.name || meeting.title || `Meeting ${meeting.nativeMeetingId || ""}`}
                         </div>
-                        <div className="flex items-center space-x-2 text-xs text-gray-500">
+                        <div className="flex items-center space-x-2 text-xs text-muted-foreground">
                           <span>{formatDate(meeting.endTime || meeting.startTime)}</span>
                           {meeting.participants && meeting.participants.length > 0 && (
                             <>
@@ -372,7 +374,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
                           )}
                         </div>
                         {meeting.participants && meeting.participants.length > 0 && (
-                          <div className="text-xs text-gray-400 truncate">
+                          <div className="text-xs text-muted-foreground/70 truncate">
                             {meeting.participants.join(", ")}
                           </div>
                         )}

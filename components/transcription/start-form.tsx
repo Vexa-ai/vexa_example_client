@@ -163,7 +163,7 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
   }
 
   return (
-    <Card className="w-full bg-white shadow-sm border border-slate-200 mb-6">
+    <Card className="w-full shadow-sm border mb-6">
       <CardHeader className="pb-2">
         <CardTitle className="text-xl">Start Transcription Bot</CardTitle>
         <CardDescription>Enter a Google Meet or Teams URL to add a transcription bot to your meeting</CardDescription>
@@ -180,7 +180,7 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
                 setMeetingUrl(e.target.value)
                 setError(null) // Clear error when user types
               }}
-              className={error ? "border-red-500" : "focus:ring-2 focus:ring-offset-1 focus:ring-blue-500"}
+              className={error ? "border-destructive" : ""}
               required
             />
             <p className="text-xs text-muted-foreground mt-1">
@@ -191,7 +191,7 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
           <div className="space-y-2">
             <Label htmlFor="language" className="font-medium">Language</Label>
             <Select value={language} onValueChange={setLanguage}>
-              <SelectTrigger id="language" className="focus:ring-2 focus:ring-offset-1 focus:ring-blue-500">
+              <SelectTrigger id="language">
                 <SelectValue placeholder="Select language" />
               </SelectTrigger>
               <SelectContent>
@@ -221,7 +221,6 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
               placeholder="Vexa"
               value={botName}
               onChange={(e) => setBotName(e.target.value)}
-              className="focus:ring-2 focus:ring-offset-1 focus:ring-blue-500"
             />
             <p className="text-xs text-muted-foreground mt-1">
               This is the name the bot will use when appearing in the meeting.
@@ -252,7 +251,7 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
 
           <Button
             type="submit"
-            className="w-full bg-blue-600 hover:bg-blue-700 transition-colors"
+            className="w-full"
             disabled={isLoading || isStoppingBot || !meetingUrl}
           >
             {isLoading ? "Starting Bot..." : "Add Bot to Meeting"}
