@@ -562,17 +562,26 @@ export function TranscriptionDisplay({
                   key={segment.id}
                   ref={el => { segmentRefs.current[segment.id] = el; }}
                   className={cn(
-                    "px-2 py-1 transition-colors border-l-2 border-l-gray-200 hover:bg-gray-100",
-                    highlightedSegmentId === segment.id && "bg-gray-200 border-l-gray-500",
+                    "px-3 py-2 transition-colors border-l-2 border-l-gray-200 hover:bg-gray-50",
+                    highlightedSegmentId === segment.id && "bg-blue-50 border-l-blue-500",
                     newSegmentIds.has(segment.id) && "bg-green-50 border-l-green-500 animate-pulse"
                   )}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm leading-relaxed">{segment.text}</p>
-                    <span className="text-xs text-gray-500 whitespace-nowrap flex items-center gap-0.5 ml-1 flex-shrink-0">
-                      <Clock className="h-3 w-3" />
-                      {formatTime(segment.timestamp)}
-                    </span>
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {segment.speaker && (
+                          <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                            {segment.speaker}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-500 whitespace-nowrap flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {formatTime(segment.timestamp)}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-800 mt-0.5">{segment.text}</p>
                   </div>
                 </div>
               ))}
