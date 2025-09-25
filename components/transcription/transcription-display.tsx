@@ -26,7 +26,8 @@ import {
 } from "@/components/ui/select"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Check } from "lucide-react"
+import { Check, Send } from "lucide-react"
+import { Input } from "@/components/ui/input"
 
 // Language options for the selector sorted by popularity and alphabetically in groups
 const languageOptions = [
@@ -217,6 +218,8 @@ export function TranscriptionDisplay({
   const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | null>(null)
   const [newSegmentIds, setNewSegmentIds] = useState<Set<string>>(new Set())
   const [selectedLanguage, setSelectedLanguage] = useState<string>("auto")
+  const [message, setMessage] = useState("")
+  const messageInputRef = useRef<HTMLInputElement>(null)
   const [isChangingLanguage, setIsChangingLanguage] = useState(false)
   const { subscribeToMeeting, unsubscribeFromMeeting, onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
   const pollingInterval = useRef<NodeJS.Timeout | null>(null)
@@ -586,6 +589,41 @@ export function TranscriptionDisplay({
                   </div>
                 </div>
               ))}
+              
+              {/* Message input area */}
+              <div className="sticky bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-3 -mx-2 -mb-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    ref={messageInputRef}
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    placeholder="Ask AI..."
+                    className="flex-1"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        if (message.trim()) {
+                          console.log('Sending message:', message)
+                          setMessage('')
+                        }
+                      }
+                    }}
+                  />
+                  <Button 
+                    size="icon" 
+                    className="h-10 w-10 flex-shrink-0"
+                    onClick={() => {
+                      if (message.trim()) {
+                        console.log('Sending message:', message)
+                        setMessage('')
+                      }
+                    }}
+                    disabled={!message.trim()}
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
         </div>
