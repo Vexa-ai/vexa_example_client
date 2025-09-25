@@ -564,7 +564,8 @@ export function TranscriptionDisplay({
                   className={cn(
                     "px-3 py-2 transition-colors border-l-2 border-l-gray-200 hover:bg-gray-50",
                     highlightedSegmentId === segment.id && "bg-blue-50 border-l-blue-500",
-                    newSegmentIds.has(segment.id) && "bg-green-50 border-l-green-500 animate-pulse"
+                    newSegmentIds.has(segment.id) && "bg-green-50 border-l-green-500 animate-pulse",
+                    segment.completed === false && "bg-gray-100"
                   )}
                 >
                   <div className="flex flex-col gap-1">

@@ -13,6 +13,7 @@ export interface TranscriptionSegment {
   id: string
   text: string
   timestamp: string
+  completed?: boolean
   speaker?: string
 }
 
