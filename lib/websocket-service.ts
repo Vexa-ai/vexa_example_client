@@ -217,19 +217,53 @@ export class TranscriptionWebSocketService {
 
   // Subscribe to meeting events
   async subscribeToMeeting(meetingId: number): Promise<void> {
+    // If already subscribed, no need to subscribe again
+    if (this.subscribedMeetings.has(meetingId)) {
+      console.log(`Already subscribed to meeting: ${meetingId}`)
+      return
+    }
+
+    // If WebSocket is not connected or connecting, establish a new connection
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket not connected")
+      if (this.isConnecting) {
+        // Wait for the connection to be established
+        await new Promise<void>((resolve) => {
+          const checkConnection = () => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              resolve()
+            } else if (this.ws && this.ws.readyState === WebSocket.CLOSED) {
+              resolve()
+            } else {
+              setTimeout(checkConnection, 100)
+            }
+          }
+          checkConnection()
+        })
+      } else {
+        // Not connected and not connecting, so connect now
+        await this.connect()
+      }
     }
 
-    const subscribeMessage = {
-      action: "subscribe",
-      meetings: [{ id: meetingId }]
+    // If still not connected after attempting to connect, throw an error
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Failed to establish WebSocket connection")
     }
 
-    this.ws.send(JSON.stringify(subscribeMessage))
-    this.subscribedMeetings.add(meetingId)
-    
-    console.log("Subscribed to meeting:", meetingId)
+    try {
+      const subscribeMessage = {
+        action: "subscribe",
+        meetings: [{ id: meetingId }]
+      }
+
+      this.ws.send(JSON.stringify(subscribeMessage))
+      this.subscribedMeetings.add(meetingId)
+      
+      console.log("Successfully subscribed to meeting:", meetingId)
+    } catch (error) {
+      console.error("Error subscribing to meeting:", error)
+      throw new Error(`Failed to subscribe to meeting ${meetingId}: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   // Unsubscribe from meeting events
