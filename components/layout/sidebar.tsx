@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { useRouter } from "next/navigation"
 import { PlusCircle, RefreshCw, Circle, CheckCircle2, AlertCircle, MoreVertical, Settings } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
+import { PlatformIcon } from "@/components/ui/platform-icon"
 import { Meeting, getMeetingHistory } from "@/lib/transcription-service"
 import { cn } from "@/lib/utils"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -209,8 +210,11 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
                 <div className="flex items-center space-x-2 overflow-hidden">
                   {getStatusIcon(meeting.status)}
                   <div className="truncate">
-                    <div className="text-sm font-medium truncate">
-                      {meeting.title || `Meeting ${meeting.nativeMeetingId || ""}`}
+                    <div className="flex items-center space-x-1">
+                      <div className="text-sm font-medium truncate">
+                        {meeting.title || `Meeting ${meeting.nativeMeetingId || ""}`}
+                      </div>
+                      <PlatformIcon platform={meeting.platform} className="h-3 w-3 text-gray-400 flex-shrink-0" />
                     </div>
                     <div className="text-xs text-gray-500">
                       {formatDate(meeting.startTime)}
