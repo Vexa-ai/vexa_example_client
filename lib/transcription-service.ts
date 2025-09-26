@@ -17,6 +17,8 @@ export interface TranscriptionSegment {
   id: string
   text: string
   timestamp: string
+  start?: number
+  end?: number
   completed?: boolean
   speaker?: string
 }
@@ -546,18 +548,22 @@ export async function getTranscription(meetingId: string): Promise<Transcription
       meetingId,
       language: data.language || "en",
       segments: segments.map((segment: any) => {
-        // Create a deterministic ID based on the text and timestamp
-        // This ensures we can properly detect duplicates
-        const segmentText = segment.text || "";
-        const timestamp = segment.absolute_start_time || segment.timestamp || new Date().toISOString();
-        const stableId = `${timestamp}-${segmentText.slice(0, 20).replace(/\s+/g, '-')}`;
+        const startNum = typeof segment.start === 'string' ? parseFloat(segment.start) : segment.start || 0
+        const endNum = typeof segment.end === 'string' ? parseFloat(segment.end) : segment.end || 0
+        const id = `${startNum.toFixed(3)}`
+        const segmentText = segment.text || ""
+        const timestamp = segment.absolute_start_time || segment.timestamp || new Date().toISOString()
+        const completed = segment.completed !== undefined ? !!segment.completed : true
 
         return {
-          id: stableId,
+          id,
           text: segmentText,
-          timestamp: timestamp,
+          timestamp,
+          start: startNum,
+          end: endNum,
+          completed,
           speaker: segment.speaker || "Unknown",
-        };
+        } as TranscriptionSegment
       }),
       status: data.status || "active",
       lastUpdated: new Date().toISOString(),
@@ -837,18 +843,22 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
       meetingId,
       language: data.language || "en",
       segments: segments.map((segment: any) => {
-        // Create a deterministic ID based on the text and timestamp
-        // This ensures we can properly detect duplicates
-        const segmentText = segment.text || "";
-        const timestamp = segment.absolute_start_time || segment.timestamp || new Date().toISOString();
-        const stableId = `${timestamp}-${segmentText.slice(0, 20).replace(/\s+/g, '-')}`;
+        const startNum = typeof segment.start === 'string' ? parseFloat(segment.start) : segment.start || 0
+        const endNum = typeof segment.end === 'string' ? parseFloat(segment.end) : segment.end || 0
+        const id = `${startNum.toFixed(3)}`
+        const segmentText = segment.text || ""
+        const timestamp = segment.absolute_start_time || segment.timestamp || new Date().toISOString()
+        const completed = segment.completed !== undefined ? !!segment.completed : true
 
         return {
-          id: stableId,
+          id,
           text: segmentText,
-          timestamp: timestamp,
+          timestamp,
+          start: startNum,
+          end: endNum,
+          completed,
           speaker: segment.speaker || "Unknown",
-        };
+        } as TranscriptionSegment
       }) || [],
       status: "stopped", // Historical view always shows as stopped
       lastUpdated: new Date().toISOString(),

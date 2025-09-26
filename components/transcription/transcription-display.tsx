@@ -225,6 +225,7 @@ export function TranscriptionDisplay({
   const { onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
   const pollingInterval = useRef<NodeJS.Timeout | null>(null)
   const transcriptionRef = useRef<HTMLDivElement>(null)
+  const isUserAtBottomRef = useRef<boolean>(true)
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const retryCount = useRef(0)
   const MAX_RETRIES = 3
@@ -341,7 +342,9 @@ export function TranscriptionDisplay({
 
     wsService.setOnTranscription((event: any) => {
       const incomingSegments = (event.segments || []).map((segment: any) => {
-        const id = `${segment.start}-${segment.end}`
+        const startNum = typeof segment.start === 'string' ? parseFloat(segment.start) : segment.start || 0
+        const endNum = typeof segment.end === 'string' ? parseFloat(segment.end) : segment.end || 0
+        const id = `${startNum.toFixed(3)}`
         const timestamp = segment.absolute_start_time
           ? segment.absolute_start_time
           : new Date((segment.start || 0) * 1000).toISOString()
@@ -350,23 +353,37 @@ export function TranscriptionDisplay({
           text: segment.text || "",
           timestamp,
           speaker: segment.speaker || "Unknown",
+          completed: segment.completed !== undefined ? !!segment.completed : true,
+          // carry numeric start for potential future ordering logic
+          // @ts-ignore
+          numericStart: startNum,
         }
       })
 
       const changedIds = new Set<string>()
 
       setSegments((prev) => {
-        const byId = new Map(prev.map(s => [s.id, s]))
+        // Preserve existing order; replace in place; append truly new at the end
+        const next = [...prev]
+        const indexById = new Map<string, number>()
+        next.forEach((s, idx) => indexById.set(s.id, idx))
+
         for (const seg of incomingSegments) {
-          const existing = byId.get(seg.id)
-          if (!existing || existing.text !== seg.text) {
-            byId.set(seg.id, seg)
+          const idx = indexById.get(seg.id)
+          if (idx !== undefined) {
+            const existing = next[idx] as any
+            // Update text and completed; treat missing completed as true
+            const incomingCompleted = seg.completed !== undefined ? !!seg.completed : true
+            if (existing.text !== seg.text || existing.completed !== incomingCompleted) {
+              next[idx] = { ...existing, text: seg.text, completed: incomingCompleted }
+              changedIds.add(seg.id)
+            }
+          } else {
+            // New segment appended with all incoming fields
+            next.push(seg as any)
             changedIds.add(seg.id)
           }
         }
-        const next = Array.from(byId.values()).sort((a, b) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        )
         return next
       })
 
@@ -391,9 +408,25 @@ export function TranscriptionDisplay({
     }
   }, [onMeetingStatusChange, offMeetingStatusChange])
 
-  // Scroll to bottom when new segments are added
+  // Track whether user is at bottom; only autoscroll when at bottom
   useEffect(() => {
-    if (transcriptionRef.current && !highlightedSegmentId && isLive) {
+    const el = transcriptionRef.current
+    if (!el) return
+
+    const handleScroll = () => {
+      const threshold = 16 // px tolerance
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold
+      isUserAtBottomRef.current = atBottom
+    }
+
+    handleScroll()
+    el.addEventListener('scroll', handleScroll)
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  // Scroll to bottom when new segments are added only if user is at bottom
+  useEffect(() => {
+    if (transcriptionRef.current && !highlightedSegmentId && isLive && isUserAtBottomRef.current) {
       transcriptionRef.current.scrollTop = transcriptionRef.current.scrollHeight
     }
   }, [segments, highlightedSegmentId, isLive])

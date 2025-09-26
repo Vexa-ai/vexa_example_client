@@ -41,24 +41,18 @@ export function AppLayout({ user }: AppLayoutProps) {
   }
 
   const handleSelectHistoricalMeeting = (meeting: Meeting) => {
-    // If the meeting is active, treat it as a live meeting
-    if (meeting.status === "active") {
-      console.log(`Meeting ${meeting.id} is active, switching to live mode`);
-      setActiveMeetingId(meeting.id)
-      setMode("live")
-      // Save native meeting id for WebSocket filtering
-      const wsService = getWebSocketService()
-      console.log('[AppLayout] Setting currentMeetingId from active selection:', meeting.native_meeting_id)
-      wsService.setCurrentMeetingId(meeting.native_meeting_id)
-    } else {
-      console.log(`Selected historical meeting: ${meeting.id}, status: ${meeting.status}`);
-      setSelectedHistoricalMeeting(meeting)
-      setMode("history")
-      // Save native meeting id for WebSocket filtering when viewing history
-      const wsService = getWebSocketService()
-      console.log('[AppLayout] Setting currentMeetingId from history selection:', meeting.native_meeting_id)
-      wsService.setCurrentMeetingId(meeting.native_meeting_id)
-    }
+    // Treat selection as live immediately to avoid stale status race; WS/initial poll will drive UI state
+    console.log(`Selecting meeting ${meeting.id}, forcing live mode (status=${meeting.status})`);
+    setActiveMeetingId(meeting.id)
+    setMode("live")
+
+    // Save native meeting id for WebSocket filtering
+    const wsService = getWebSocketService()
+    console.log('[AppLayout] Setting currentMeetingId from selection:', meeting.native_meeting_id)
+    wsService.setCurrentMeetingId(meeting.native_meeting_id)
+
+    // Also keep reference for history view if needed later
+    setSelectedHistoricalMeeting(meeting)
   }
 
   const handleNewMeeting = () => {

@@ -212,7 +212,13 @@ export class TranscriptionWebSocketService {
           console.log(
             `[WS] handle transcription: incoming meeting_id=${transcriptionEvent.meeting_id}, currentMeetingId=${this.currentMeetingId}`
           )
-          if (this.currentMeetingId !== transcriptionEvent.meeting_id) {
+          // If not yet set, infer the current meeting id from the first transcription event
+          if (!this.currentMeetingId && transcriptionEvent.meeting_id) {
+            this.setCurrentMeetingId(transcriptionEvent.meeting_id)
+            console.log('[WS] currentMeetingId inferred from transcription event:', this.currentMeetingId)
+          }
+          // Only ignore if currentMeetingId is set and differs from message
+          if (this.currentMeetingId && this.currentMeetingId !== transcriptionEvent.meeting_id) {
             console.log(`Ignoring transcription for meeting_id ${transcriptionEvent.meeting_id} because currentMeetingId is ${this.currentMeetingId}`)
             break
           }
