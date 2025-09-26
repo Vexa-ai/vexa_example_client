@@ -76,6 +76,17 @@ export function AppLayout({ user }: AppLayoutProps) {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  // Listen for navigate-to-setup event (after removing transcription)
+  useEffect(() => {
+    const toSetup = () => {
+      setActiveMeetingId(null)
+      setSelectedHistoricalMeeting(null)
+      setMode("setup")
+    }
+    window.addEventListener('vexa:navigate-setup' as any, toSetup)
+    return () => window.removeEventListener('vexa:navigate-setup' as any, toSetup)
+  }, [])
+
   return (
     <div className="flex h-screen overflow-hidden bg-white relative">
       {/* Mobile sidebar toggle button */}

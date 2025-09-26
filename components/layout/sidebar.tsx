@@ -98,6 +98,56 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
     }
   }, [handleMeetingStatusUpdate, onMeetingStatusChange, offMeetingStatusChange])
 
+  // Handle meeting removed event from other components (e.g., TranscriptionDisplay)
+  useEffect(() => {
+    const handleRemoved = (e: any) => {
+      const { platform, nativeMeetingId, meetingId } = e.detail || {}
+      console.log('[Sidebar] Removing meeting from list:', platform, nativeMeetingId, meetingId)
+      setMeetings(prev => prev.filter(m => m.id !== meetingId))
+    }
+    window.addEventListener('vexa:meeting-removed' as any, handleRemoved)
+    return () => window.removeEventListener('vexa:meeting-removed' as any, handleRemoved)
+  }, [])
+
+  // Listen for meeting data/status updates from transcription view
+  useEffect(() => {
+    const handleUpdated = (e: any) => {
+      const { meetingId, status, platform, nativeMeetingId } = e.detail || {}
+      let matched = false
+      const next = (prev: Meeting[]) => prev.map(m => {
+        const matchesById = meetingId && m.id === meetingId
+        const matchesByTuple = platform && nativeMeetingId && m.platform === platform && m.nativeMeetingId === nativeMeetingId
+        if (matchesById || matchesByTuple) {
+          matched = true
+          return { ...m, status: status ?? m.status }
+        }
+        return m
+      })
+      setMeetings(next)
+      if (!matched) {
+        // Fallback: refresh list to capture new status if item wasn't loaded yet
+        handleRefresh().catch(() => {})
+      }
+    }
+    window.addEventListener('vexa:meeting-updated' as any, handleUpdated)
+    return () => window.removeEventListener('vexa:meeting-updated' as any, handleUpdated)
+  }, [])
+
+  // Listen for newly created meeting and prepend to list, then auto-select
+  useEffect(() => {
+    const handleCreated = (e: any) => {
+      const { meeting } = e.detail || {}
+      if (!meeting) return
+      setMeetings(prev => [meeting, ...prev])
+      try {
+        wsService.setCurrentMeetingId(meeting.native_meeting_id)
+      } catch {}
+      onSelectMeeting(meeting)
+    }
+    window.addEventListener('vexa:meeting-created' as any, handleCreated)
+    return () => window.removeEventListener('vexa:meeting-created' as any, handleCreated)
+  }, [onSelectMeeting, wsService])
+
   const getStatusIcon = (status: string | undefined) => {
     switch (status) {
       case "active":

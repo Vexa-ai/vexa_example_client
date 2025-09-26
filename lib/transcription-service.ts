@@ -311,7 +311,7 @@ export async function startTranscription(
   meetingUrl: string,
   language = "auto",
   botName = "Vexa",
-): Promise<{ success: boolean; meetingId: string }> {
+): Promise<{ success: boolean; meetingId: string; createdMeeting?: Meeting }> {
   // Use mock implementation if in mock mode
   if (MOCK_MODE) {
     await new Promise((resolve) => setTimeout(resolve, 1000)) // Simulate API delay
@@ -361,11 +361,25 @@ export async function startTranscription(
       body: JSON.stringify(requestPayload),
     })
 
-    await handleApiResponse<any>(response)
+    const data = await handleApiResponse<any>(response)
+
+    // Build meeting shape compatible with Sidebar
+    const createdMeeting: Meeting | undefined = data && typeof data === 'object' ? {
+      id: `${platform}/${nativeMeetingId}/${data.id ?? ''}`,
+      platformId: platform,
+      nativeMeetingId: nativeMeetingId,
+      native_meeting_id: nativeMeetingId,
+      platform: platform,
+      status: data.status || "requested",
+      startTime: data.start_time || new Date().toISOString(),
+      endTime: data.end_time,
+      title: `Meeting ${nativeMeetingId}`
+    } : undefined
 
     return {
       success: true,
-      meetingId: `${platform}/${nativeMeetingId}`, // We're storing the full ID that we need for future calls
+      meetingId: createdMeeting?.id || `${platform}/${nativeMeetingId}`,
+      createdMeeting,
     }
   } catch (error) {
     console.error("Error starting transcription:", error)
@@ -865,6 +879,25 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
     }
   } catch (error) {
     console.error("Error getting meeting transcript:", error)
+    throw error
+  }
+}
+
+/**
+ * Remove a completed meeting's transcript
+ * @param platform Meeting platform, e.g., 'google_meet'
+ * @param nativeMeetingId Native meeting id, e.g., 'abc-def-ghi'
+ */
+export async function removeMeeting(platform: string, nativeMeetingId: string): Promise<{ success: boolean }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/meetings/${platform}/${nativeMeetingId}`, {
+      method: "DELETE",
+      headers: getHeaders(),
+    })
+    await handleApiResponse<any>(response)
+    return { success: true }
+  } catch (error) {
+    console.error("Error removing meeting:", error)
     throw error
   }
 }

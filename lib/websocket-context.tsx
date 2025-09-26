@@ -43,6 +43,16 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       })
     })
 
+    // Broadcast session_start to update meeting status to active globally
+    wsService.setOnSessionStart((event: any) => {
+      try {
+        const platform = event.platform
+        const nativeMeetingId = event.meeting_id
+        // Sidebar will update matching meeting by platform/native id
+        window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { platform, nativeMeetingId, status: 'active' } }))
+      } catch {}
+    })
+
     // Connect to WebSocket on mount
     wsService.connect().catch(console.error)
 

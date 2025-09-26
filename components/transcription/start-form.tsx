@@ -52,7 +52,11 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
     }
   };
 
-  const handleStart = async () => {
+  const handleStart = async (e?: React.FormEvent) => {
+    // Prevent full page refresh caused by form submit
+    if (e && typeof e.preventDefault === 'function') {
+      e.preventDefault()
+    }
     setError(null)
     const match = meetingUrl.trim().match(meetUrlRegex);
 
@@ -68,11 +72,17 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
     setIsLoading(true)
     try {
       // Assuming startTranscription now takes the cleaned URL
-      const { meetingId } = await startTranscription(cleanUrl)
+      const { meetingId, createdMeeting } = await startTranscription(cleanUrl)
       toast({
         title: "Transcription Started",
         description: `Meeting ID: ${meetingId}`,
       })
+      // Broadcast new meeting to sidebar and select it
+      try {
+        if (createdMeeting) {
+          window.dispatchEvent(new CustomEvent('vexa:meeting-created', { detail: { meeting: createdMeeting } }))
+        }
+      } catch {}
       onStart(meetingId)
     } catch (err: any) {
       console.error("Error starting transcription:", err)

@@ -10,7 +10,8 @@ import {
   getTranscription,
   stopTranscription,
   getMeetingTranscript,
-  updateTranscriptionLanguage
+  updateTranscriptionLanguage,
+  removeMeeting
 } from "@/lib/transcription-service"
 import { useWebSocket } from "@/lib/websocket-context"
 import { getWebSocketService } from "@/lib/websocket-service"
@@ -222,6 +223,7 @@ export function TranscriptionDisplay({
   const [message, setMessage] = useState("")
   const messageInputRef = useRef<HTMLInputElement>(null)
   const [isChangingLanguage, setIsChangingLanguage] = useState(false)
+  const [meetingStatus, setMeetingStatus] = useState<string | null>(null)
   const { onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
   const pollingInterval = useRef<NodeJS.Timeout | null>(null)
   const transcriptionRef = useRef<HTMLDivElement>(null)
@@ -265,8 +267,16 @@ export function TranscriptionDisplay({
       }
 
       setTranscription(data)
+      setMeetingStatus(data.status)
+      // Notify sidebar about updated meeting status/details
+      try {
+        if (meetingId) {
+          window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { meetingId, status: data.status } }))
+        }
+      } catch {}
 
       // No per-meeting subscription required; WS already connected
+      setMeetingStatus(data.status)
       if (data.status !== "active") {
         console.log("Meeting not active, status:", data.status);
         if (data.status === "error") {
@@ -292,6 +302,13 @@ export function TranscriptionDisplay({
       const data = await getMeetingTranscript(meetingId)
       setSegments(data.segments)
       setTranscription(data)
+      setMeetingStatus(data.status)
+      // Notify sidebar about updated meeting status/details
+      try {
+        if (meetingId) {
+          window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { meetingId, status: data.status } }))
+        }
+      } catch {}
       
       // Update language from the historical transcript
       if (data.language && data.language !== "auto-detected") {
@@ -395,16 +412,42 @@ export function TranscriptionDisplay({
 
     const handleMeetingStatusUpdate = (meetingId: number, status: string) => {
       console.log("WebSocket meeting status:", status)
+      setMeetingStatus(status)
       if (status !== "active") {
-        setError(`Meeting status changed to: ${status}`)
+        // Do not spam errors for requested/completed; UI messaging will inform the user
+        if (status === 'error') {
+          setError(`Meeting status changed to: ${status}`)
+        }
+      } else {
+        // Clear transient errors once active
+        setError(null)
       }
+      // Notify sidebar about updated meeting status from WS
+      try {
+        if (typeof window !== 'undefined' && typeof meetingId === 'string') {
+          window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { meetingId, status } }))
+        }
+      } catch {}
     }
 
     // Subscribe to WebSocket events
     onMeetingStatusChange(handleMeetingStatusUpdate)
+    // Also listen to global updates (e.g., session_start) and update if current meeting matches
+    const handleGlobalUpdate = (e: any) => {
+      const { platform, nativeMeetingId, status } = e.detail || {}
+      if (!meetingId || !platform || !nativeMeetingId) return
+      const parts = meetingId.split('/')
+      const currentPlatform = parts[0]
+      const currentNative = parts[1]
+      if (currentPlatform === platform && currentNative === nativeMeetingId) {
+        setMeetingStatus(status)
+      }
+    }
+    window.addEventListener('vexa:meeting-updated' as any, handleGlobalUpdate)
     
     return () => {
       offMeetingStatusChange(handleMeetingStatusUpdate)
+      window.removeEventListener('vexa:meeting-updated' as any, handleGlobalUpdate)
     }
   }, [onMeetingStatusChange, offMeetingStatusChange])
 
@@ -522,9 +565,39 @@ export function TranscriptionDisplay({
               disabled={segments.length === 0 || isLoading}
             />
           )}
-          {isLive && onStop && (
+          {meetingStatus !== 'completed' && isLive && onStop && (
             <Button onClick={handleStop} variant="destructive" size="sm" className="h-7 text-xs py-0 px-2" disabled={isLoading}>
               {isLoading ? "Stopping..." : "Stop Bot"}
+            </Button>
+          )}
+          {meetingStatus === 'completed' && meetingId && (
+            <Button
+              onClick={async () => {
+                try {
+                  setIsLoading(true)
+                  // meetingId format: platform/native[/internal]
+                  const parts = meetingId.split('/')
+                  const platform = parts[0]
+                  const nativeId = parts[1]
+                  await removeMeeting(platform, nativeId)
+                  // Notify sidebar to remove item
+                  window.dispatchEvent(new CustomEvent('vexa:meeting-removed', { detail: { platform, nativeMeetingId: nativeId, meetingId } }))
+                  // Navigate to new meeting/setup screen
+                  window.dispatchEvent(new CustomEvent('vexa:navigate-setup'))
+                  setError(null)
+                } catch (e) {
+                  console.error('Failed to remove meeting', e)
+                  setError('Failed to remove transcription')
+                } finally {
+                  setIsLoading(false)
+                }
+              }}
+              variant="destructive"
+              size="sm"
+              className="h-7 text-xs py-0 px-2"
+              disabled={isLoading}
+            >
+              Remove Transcription
             </Button>
           )}
         </div>
@@ -554,15 +627,24 @@ export function TranscriptionDisplay({
           ref={transcriptionRef} 
           className="flex-1 overflow-y-auto border-t border-gray-200 bg-gray-50 p-2 mt-1"
         >
-          {segments.length === 0 && !isLoading ? (
+          {(!isLoading && meetingStatus === 'requested') ? (
             <div className="text-center text-gray-500 py-4">
-              {isLive 
-                ? <TranscriptionCountdown />
-                : "No transcript available for this meeting."
-              }
+              <TranscriptionCountdown />
+            </div>
+          ) : (!isLoading && meetingStatus === 'completed' && segments.length === 0) ? (
+            <div className="text-center text-gray-500 py-4">
+              The conversation was not recognised in this call.
+            </div>
+          ) : (!isLoading && meetingStatus === 'active' && segments.length === 0) ? (
+            <div className="text-center text-gray-500 py-4">
+              Waiting for the conversation to start...
+            </div>
+          ) : (segments.length === 0 && !isLoading && !isLive) ? (
+            <div className="text-center text-gray-500 py-4">
+              No transcript available for this meeting.
             </div>
           ) : (
-            <div className="space-y-1 font-light text-gray-800 pb-10">
+            <div className="space-y-1 font-light text-gray-800 pb-2">
               {segments.map((segment) => (
                 <div
                   key={segment.id}
@@ -592,43 +674,42 @@ export function TranscriptionDisplay({
                   </div>
                 </div>
               ))}
-              
-              {/* Message input area */}
-              <div className="sticky bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-3 -mx-2 -mb-2">
-                <div className="flex items-center gap-2">
-                  <Input
-                    ref={messageInputRef}
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
-                    placeholder="Ask AI..."
-                    className="flex-1"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault()
-                        if (message.trim()) {
-                          console.log('Sending message:', message)
-                          setMessage('')
-                        }
-                      }
-                    }}
-                  />
-                  <Button 
-                    size="icon" 
-                    className="h-10 w-10 flex-shrink-0"
-                    onClick={() => {
-                      if (message.trim()) {
-                        console.log('Sending message:', message)
-                        setMessage('')
-                      }
-                    }}
-                    disabled={!message.trim()}
-                  >
-                    <Send className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
             </div>
           )}
+        </div>
+        {/* Message input area pinned at the bottom of the card content */}
+        <div className="bg-white border-t border-gray-200 p-3">
+          <div className="flex items-center gap-2">
+            <Input
+              ref={messageInputRef}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Ask AI..."
+              className="flex-1"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  if (message.trim()) {
+                    console.log('Sending message:', message)
+                    setMessage('')
+                  }
+                }
+              }}
+            />
+            <Button 
+              size="icon" 
+              className="h-10 w-10 flex-shrink-0"
+              onClick={() => {
+                if (message.trim()) {
+                  console.log('Sending message:', message)
+                  setMessage('')
+                }
+              }}
+              disabled={!message.trim()}
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>
