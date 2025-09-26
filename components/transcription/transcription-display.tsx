@@ -27,7 +27,8 @@ import {
 } from "@/components/ui/select"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Check } from "lucide-react"
+import { Check, Send } from "lucide-react"
+import { Input } from "@/components/ui/input"
 
 // Language options for the selector sorted by popularity and alphabetically in groups
 const languageOptions = [
@@ -218,6 +219,8 @@ export function TranscriptionDisplay({
   const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | null>(null)
   const [newSegmentIds, setNewSegmentIds] = useState<Set<string>>(new Set())
   const [selectedLanguage, setSelectedLanguage] = useState<string>("auto")
+  const [message, setMessage] = useState("")
+  const messageInputRef = useRef<HTMLInputElement>(null)
   const [isChangingLanguage, setIsChangingLanguage] = useState(false)
   const { onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
   const pollingInterval = useRef<NodeJS.Timeout | null>(null)
@@ -532,20 +535,65 @@ export function TranscriptionDisplay({
                   key={segment.id}
                   ref={el => { segmentRefs.current[segment.id] = el; }}
                   className={cn(
-                    "px-2 py-1 transition-colors border-l-2 border-l-gray-200 hover:bg-gray-100",
-                    highlightedSegmentId === segment.id && "bg-gray-200 border-l-gray-500",
-                    newSegmentIds.has(segment.id) && "bg-green-50 border-l-green-500 animate-pulse"
+                    "px-3 py-2 transition-colors border-l-2 border-l-gray-200 hover:bg-gray-50",
+                    highlightedSegmentId === segment.id && "bg-blue-50 border-l-blue-500",
+                    newSegmentIds.has(segment.id) && "bg-green-50 border-l-green-500 animate-pulse",
+                    segment.completed === false && "bg-gray-100"
                   )}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm leading-relaxed">{segment.text}</p>
-                    <span className="text-xs text-gray-500 whitespace-nowrap flex items-center gap-0.5 ml-1 flex-shrink-0">
-                      <Clock className="h-3 w-3" />
-                      {formatTime(segment.timestamp)}
-                    </span>
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {segment.speaker && (
+                          <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                            {segment.speaker}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-500 whitespace-nowrap flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {formatTime(segment.timestamp)}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-800 mt-0.5">{segment.text}</p>
                   </div>
                 </div>
               ))}
+              
+              {/* Message input area */}
+              <div className="sticky bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-3 -mx-2 -mb-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    ref={messageInputRef}
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    placeholder="Ask AI..."
+                    className="flex-1"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        if (message.trim()) {
+                          console.log('Sending message:', message)
+                          setMessage('')
+                        }
+                      }
+                    }}
+                  />
+                  <Button 
+                    size="icon" 
+                    className="h-10 w-10 flex-shrink-0"
+                    onClick={() => {
+                      if (message.trim()) {
+                        console.log('Sending message:', message)
+                        setMessage('')
+                      }
+                    }}
+                    disabled={!message.trim()}
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
         </div>
