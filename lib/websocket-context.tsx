@@ -5,9 +5,6 @@ import { getWebSocketService, type MeetingStatusEvent } from './websocket-servic
 
 interface WebSocketContextType {
   isConnected: boolean
-  subscribedMeetings: number[]
-  subscribeToMeeting: (meetingId: number) => Promise<void>
-  unsubscribeFromMeeting: (meetingId: number) => Promise<void>
   onMeetingStatusChange: (callback: (meetingId: number, status: string) => void) => void
   offMeetingStatusChange: (callback: (meetingId: number, status: string) => void) => void
 }
@@ -16,7 +13,6 @@ const WebSocketContext = createContext<WebSocketContextType | null>(null)
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
-  const [subscribedMeetings, setSubscribedMeetings] = useState<number[]>([])
   const [statusCallbacks, setStatusCallbacks] = useState<Set<(meetingId: number, status: string) => void>>(new Set())
 
   const wsService = getWebSocketService()
@@ -29,7 +25,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
     wsService.setOnDisconnected(() => {
       setIsConnected(false)
-      setSubscribedMeetings([])
     })
 
     wsService.setOnMeetingStatus((event: MeetingStatusEvent) => {
@@ -48,6 +43,16 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       })
     })
 
+    // Broadcast session_start to update meeting status to active globally
+    wsService.setOnSessionStart((event: any) => {
+      try {
+        const platform = event.platform
+        const nativeMeetingId = event.meeting_id
+        // Sidebar will update matching meeting by platform/native id
+        window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { platform, nativeMeetingId, status: 'active' } }))
+      } catch {}
+    })
+
     // Connect to WebSocket on mount
     wsService.connect().catch(console.error)
 
@@ -57,28 +62,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     }
   }, [statusCallbacks])
 
-  const subscribeToMeeting = useCallback(async (meetingId: number) => {
-    try {
-      await wsService.subscribeToMeeting(meetingId)
-      setSubscribedMeetings(prev => {
-        if (!prev.includes(meetingId)) {
-          return [...prev, meetingId]
-        }
-        return prev
-      })
-    } catch (error) {
-      console.error('Failed to subscribe to meeting:', error)
-    }
-  }, [])
-
-  const unsubscribeFromMeeting = useCallback(async (meetingId: number) => {
-    try {
-      await wsService.unsubscribeFromMeeting(meetingId)
-      setSubscribedMeetings(prev => prev.filter(id => id !== meetingId))
-    } catch (error) {
-      console.error('Failed to unsubscribe from meeting:', error)
-    }
-  }, [])
+  // No per-meeting subscribe/unsubscribe. We connect once and filter in service by current meeting id.
 
   const onMeetingStatusChange = useCallback((callback: (meetingId: number, status: string) => void) => {
     setStatusCallbacks(prev => new Set([...prev, callback]))
@@ -94,9 +78,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
   const value: WebSocketContextType = {
     isConnected,
-    subscribedMeetings,
-    subscribeToMeeting,
-    unsubscribeFromMeeting,
     onMeetingStatusChange,
     offMeetingStatusChange,
   }

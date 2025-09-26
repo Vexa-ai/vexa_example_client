@@ -10,9 +10,11 @@ import {
   getTranscription,
   stopTranscription,
   getMeetingTranscript,
-  updateTranscriptionLanguage
+  updateTranscriptionLanguage,
+  removeMeeting
 } from "@/lib/transcription-service"
 import { useWebSocket } from "@/lib/websocket-context"
+import { getWebSocketService } from "@/lib/websocket-service"
 import { useEffect, useRef, useState, useCallback } from "react"
 import { DownloadTranscript } from "./download-transcript"
 import { TranscriptSearch } from "./transcript-search"
@@ -26,7 +28,8 @@ import {
 } from "@/components/ui/select"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Check } from "lucide-react"
+import { Check, Send } from "lucide-react"
+import { Input } from "@/components/ui/input"
 
 // Language options for the selector sorted by popularity and alphabetically in groups
 const languageOptions = [
@@ -217,10 +220,14 @@ export function TranscriptionDisplay({
   const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | null>(null)
   const [newSegmentIds, setNewSegmentIds] = useState<Set<string>>(new Set())
   const [selectedLanguage, setSelectedLanguage] = useState<string>("auto")
+  const [message, setMessage] = useState("")
+  const messageInputRef = useRef<HTMLInputElement>(null)
   const [isChangingLanguage, setIsChangingLanguage] = useState(false)
-  const { subscribeToMeeting, unsubscribeFromMeeting, onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
+  const [meetingStatus, setMeetingStatus] = useState<string | null>(null)
+  const { onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
   const pollingInterval = useRef<NodeJS.Timeout | null>(null)
   const transcriptionRef = useRef<HTMLDivElement>(null)
+  const isUserAtBottomRef = useRef<boolean>(true)
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const retryCount = useRef(0)
   const MAX_RETRIES = 3
@@ -237,26 +244,7 @@ export function TranscriptionDisplay({
     }
   }, [newSegmentIds]);
 
-  // Function to subscribe to WebSocket updates for a meeting
-  const subscribeToWebSocketUpdates = async (internalMeetingId: number) => {
-    try {
-      await subscribeToMeeting(internalMeetingId)
-      console.log("Subscribed to WebSocket updates for meeting:", internalMeetingId)
-    } catch (err) {
-      console.error("Failed to subscribe to WebSocket:", err)
-      setError("Failed to connect to real-time updates.")
-    }
-  }
-
-  // Function to unsubscribe from WebSocket updates
-  const unsubscribeFromWebSocketUpdates = async (internalMeetingId: number) => {
-    try {
-      await unsubscribeFromMeeting(internalMeetingId)
-      console.log("Unsubscribed from WebSocket updates for meeting:", internalMeetingId)
-    } catch (err) {
-      console.error("Failed to unsubscribe from WebSocket:", err)
-    }
-  }
+  // No per-meeting subscribe/unsubscribe. Single connection; events filtered by current meeting id inside WS service.
 
   // Function to poll once for initial data on page load
   const pollOnceForInitialData = async () => {
@@ -279,25 +267,17 @@ export function TranscriptionDisplay({
       }
 
       setTranscription(data)
-
-      // If meeting is active, subscribe to WebSocket updates
-      if (data.status === "active") {
-        // Extract internal meeting ID from the meetingId string
-        // meetingId format: "platform/nativeMeetingId" or "platform/nativeMeetingId/internalId"
-        const parts = meetingId.split('/');
-        if (parts.length >= 3) {
-          // Has internal ID
-          const internalMeetingId = parseInt(parts[2]);
-          if (!isNaN(internalMeetingId)) {
-            console.log("Subscribing to WebSocket for active meeting:", internalMeetingId);
-            await subscribeToWebSocketUpdates(internalMeetingId);
-          } else {
-            setError("Invalid meeting ID format for WebSocket connection");
-          }
-        } else {
-          setError("Meeting ID missing internal ID for WebSocket connection");
+      setMeetingStatus(data.status)
+      // Notify sidebar about updated meeting status/details
+      try {
+        if (meetingId) {
+          window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { meetingId, status: data.status } }))
         }
-      } else {
+      } catch {}
+
+      // No per-meeting subscription required; WS already connected
+      setMeetingStatus(data.status)
+      if (data.status !== "active") {
         console.log("Meeting not active, status:", data.status);
         if (data.status === "error") {
           setError("Transcription service reported an error. Please try again.")
@@ -322,6 +302,13 @@ export function TranscriptionDisplay({
       const data = await getMeetingTranscript(meetingId)
       setSegments(data.segments)
       setTranscription(data)
+      setMeetingStatus(data.status)
+      // Notify sidebar about updated meeting status/details
+      try {
+        if (meetingId) {
+          window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { meetingId, status: data.status } }))
+        }
+      } catch {}
       
       // Update language from the historical transcript
       if (data.language && data.language !== "auto-detected") {
@@ -341,6 +328,17 @@ export function TranscriptionDisplay({
     setSegments([])
     setTranscription(null)
     setError(null)
+    // Defensive: set WS current meeting id here as well (native part)
+    try {
+      if (meetingId) {
+        const parts = meetingId.split('/')
+        const nativeId = parts.length >= 2 ? parts[1] : meetingId
+        getWebSocketService().setCurrentMeetingId(nativeId)
+        console.log('[TranscriptionDisplay] Ensured currentMeetingId on mount/change:', nativeId)
+      }
+    } catch (e) {
+      console.error('Failed to set currentMeetingId in TranscriptionDisplay:', e)
+    }
     
     if (shouldDisplay) {
       if (isLive) {
@@ -357,63 +355,121 @@ export function TranscriptionDisplay({
 
   // Handle WebSocket transcript updates
   useEffect(() => {
-    const handleTranscriptUpdate = (meetingId: number, segments: any[]) => {
-      console.log("WebSocket transcript update:", segments.length, "segments")
-      
-      // Convert WebSocket segments to our format
-      const convertedSegments = segments.map(segment => ({
-        id: `${segment.start}-${segment.text.slice(0, 20).replace(/\s+/g, '-')}`,
-        text: segment.text || "",
-        timestamp: new Date(Date.now() - (Date.now() - segment.start * 1000)).toISOString(),
-        speaker: segment.speaker || "Unknown",
-      }))
-      
-      // Track new or changed segments for highlight effect
-      const changedSegmentIds = new Set<string>()
-      
-      setSegments((prevSegments) => {
-        const prevSegmentsMap = new Map(prevSegments.map(s => [s.id, s]))
-        
-        // Mark segments that are new or changed
-        convertedSegments.forEach(segment => {
-          const prevSegment = prevSegmentsMap.get(segment.id)
-          if (!prevSegment || prevSegment.text !== segment.text) {
-            changedSegmentIds.add(segment.id)
-          }
-        })
-        
-        if (changedSegmentIds.size > 0) {
-          console.log(`Found ${changedSegmentIds.size} new or updated segments via WebSocket`)
+    const wsService = getWebSocketService()
+
+    wsService.setOnTranscription((event: any) => {
+      const incomingSegments = (event.segments || []).map((segment: any) => {
+        const startNum = typeof segment.start === 'string' ? parseFloat(segment.start) : segment.start || 0
+        const endNum = typeof segment.end === 'string' ? parseFloat(segment.end) : segment.end || 0
+        const id = `${startNum.toFixed(3)}`
+        const timestamp = segment.absolute_start_time
+          ? segment.absolute_start_time
+          : new Date((segment.start || 0) * 1000).toISOString()
+        return {
+          id,
+          text: segment.text || "",
+          timestamp,
+          speaker: segment.speaker || "Unknown",
+          completed: segment.completed !== undefined ? !!segment.completed : true,
+          // carry numeric start for potential future ordering logic
+          // @ts-ignore
+          numericStart: startNum,
         }
-        
-        return [...convertedSegments].sort((a, b) => 
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        )
       })
-      
-      if (changedSegmentIds.size > 0) {
-        setNewSegmentIds(changedSegmentIds)
+
+      const changedIds = new Set<string>()
+
+      setSegments((prev) => {
+        // Preserve existing order; replace in place; append truly new at the end
+        const next = [...prev]
+        const indexById = new Map<string, number>()
+        next.forEach((s, idx) => indexById.set(s.id, idx))
+
+        for (const seg of incomingSegments) {
+          const idx = indexById.get(seg.id)
+          if (idx !== undefined) {
+            const existing = next[idx] as any
+            // Update text and completed; treat missing completed as true
+            const incomingCompleted = seg.completed !== undefined ? !!seg.completed : true
+            if (existing.text !== seg.text || existing.completed !== incomingCompleted) {
+              next[idx] = { ...existing, text: seg.text, completed: incomingCompleted }
+              changedIds.add(seg.id)
+            }
+          } else {
+            // New segment appended with all incoming fields
+            next.push(seg as any)
+            changedIds.add(seg.id)
+          }
+        }
+        return next
+      })
+
+      if (changedIds.size > 0) {
+        console.log(`[WS] merged ${changedIds.size} segments into UI`)
+        setNewSegmentIds(changedIds)
       }
-    }
+    })
 
     const handleMeetingStatusUpdate = (meetingId: number, status: string) => {
       console.log("WebSocket meeting status:", status)
+      setMeetingStatus(status)
       if (status !== "active") {
-        setError(`Meeting status changed to: ${status}`)
+        // Do not spam errors for requested/completed; UI messaging will inform the user
+        if (status === 'error') {
+          setError(`Meeting status changed to: ${status}`)
+        }
+      } else {
+        // Clear transient errors once active
+        setError(null)
       }
+      // Notify sidebar about updated meeting status from WS
+      try {
+        if (typeof window !== 'undefined' && typeof meetingId === 'string') {
+          window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { meetingId, status } }))
+        }
+      } catch {}
     }
 
     // Subscribe to WebSocket events
     onMeetingStatusChange(handleMeetingStatusUpdate)
+    // Also listen to global updates (e.g., session_start) and update if current meeting matches
+    const handleGlobalUpdate = (e: any) => {
+      const { platform, nativeMeetingId, status } = e.detail || {}
+      if (!meetingId || !platform || !nativeMeetingId) return
+      const parts = meetingId.split('/')
+      const currentPlatform = parts[0]
+      const currentNative = parts[1]
+      if (currentPlatform === platform && currentNative === nativeMeetingId) {
+        setMeetingStatus(status)
+      }
+    }
+    window.addEventListener('vexa:meeting-updated' as any, handleGlobalUpdate)
     
     return () => {
       offMeetingStatusChange(handleMeetingStatusUpdate)
+      window.removeEventListener('vexa:meeting-updated' as any, handleGlobalUpdate)
     }
   }, [onMeetingStatusChange, offMeetingStatusChange])
 
-  // Scroll to bottom when new segments are added
+  // Track whether user is at bottom; only autoscroll when at bottom
   useEffect(() => {
-    if (transcriptionRef.current && !highlightedSegmentId && isLive) {
+    const el = transcriptionRef.current
+    if (!el) return
+
+    const handleScroll = () => {
+      const threshold = 16 // px tolerance
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold
+      isUserAtBottomRef.current = atBottom
+    }
+
+    handleScroll()
+    el.addEventListener('scroll', handleScroll)
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  // Scroll to bottom when new segments are added only if user is at bottom
+  useEffect(() => {
+    if (transcriptionRef.current && !highlightedSegmentId && isLive && isUserAtBottomRef.current) {
       transcriptionRef.current.scrollTop = transcriptionRef.current.scrollHeight
     }
   }, [segments, highlightedSegmentId, isLive])
@@ -433,14 +489,7 @@ export function TranscriptionDisplay({
     try {
       setIsLoading(true)
 
-      // Unsubscribe from WebSocket updates
-      const parts = meetingId.split('/');
-      if (parts.length >= 3) {
-        const internalMeetingId = parseInt(parts[2]);
-        if (!isNaN(internalMeetingId)) {
-          await unsubscribeFromWebSocketUpdates(internalMeetingId);
-        }
-      }
+      // No per-meeting unsubscribe required
 
       await stopTranscription(meetingId)
       onStop()
@@ -516,9 +565,39 @@ export function TranscriptionDisplay({
               disabled={segments.length === 0 || isLoading}
             />
           )}
-          {isLive && onStop && (
+          {meetingStatus !== 'completed' && isLive && onStop && (
             <Button onClick={handleStop} variant="destructive" size="sm" className="h-7 text-xs py-0 px-2" disabled={isLoading}>
               {isLoading ? "Stopping..." : "Stop Bot"}
+            </Button>
+          )}
+          {meetingStatus === 'completed' && meetingId && (
+            <Button
+              onClick={async () => {
+                try {
+                  setIsLoading(true)
+                  // meetingId format: platform/native[/internal]
+                  const parts = meetingId.split('/')
+                  const platform = parts[0]
+                  const nativeId = parts[1]
+                  await removeMeeting(platform, nativeId)
+                  // Notify sidebar to remove item
+                  window.dispatchEvent(new CustomEvent('vexa:meeting-removed', { detail: { platform, nativeMeetingId: nativeId, meetingId } }))
+                  // Navigate to new meeting/setup screen
+                  window.dispatchEvent(new CustomEvent('vexa:navigate-setup'))
+                  setError(null)
+                } catch (e) {
+                  console.error('Failed to remove meeting', e)
+                  setError('Failed to remove transcription')
+                } finally {
+                  setIsLoading(false)
+                }
+              }}
+              variant="destructive"
+              size="sm"
+              className="h-7 text-xs py-0 px-2"
+              disabled={isLoading}
+            >
+              Remove Transcription
             </Button>
           )}
         </div>
@@ -548,36 +627,89 @@ export function TranscriptionDisplay({
           ref={transcriptionRef} 
           className="flex-1 overflow-y-auto border-t border-gray-200 bg-gray-50 p-2 mt-1"
         >
-          {segments.length === 0 && !isLoading ? (
+          {(!isLoading && meetingStatus === 'requested') ? (
             <div className="text-center text-gray-500 py-4">
-              {isLive 
-                ? <TranscriptionCountdown />
-                : "No transcript available for this meeting."
-              }
+              <TranscriptionCountdown />
+            </div>
+          ) : (!isLoading && meetingStatus === 'completed' && segments.length === 0) ? (
+            <div className="text-center text-gray-500 py-4">
+              The conversation was not recognised in this call.
+            </div>
+          ) : (!isLoading && meetingStatus === 'active' && segments.length === 0) ? (
+            <div className="text-center text-gray-500 py-4">
+              Waiting for the conversation to start...
+            </div>
+          ) : (segments.length === 0 && !isLoading && !isLive) ? (
+            <div className="text-center text-gray-500 py-4">
+              No transcript available for this meeting.
             </div>
           ) : (
-            <div className="space-y-1 font-light text-gray-800 pb-10">
+            <div className="space-y-1 font-light text-gray-800 pb-2">
               {segments.map((segment) => (
                 <div
                   key={segment.id}
                   ref={el => { segmentRefs.current[segment.id] = el; }}
                   className={cn(
-                    "px-2 py-1 transition-colors border-l-2 border-l-gray-200 hover:bg-gray-100",
-                    highlightedSegmentId === segment.id && "bg-gray-200 border-l-gray-500",
-                    newSegmentIds.has(segment.id) && "bg-green-50 border-l-green-500 animate-pulse"
+                    "px-3 py-2 transition-colors border-l-2 border-l-gray-200 hover:bg-gray-50",
+                    highlightedSegmentId === segment.id && "bg-blue-50 border-l-blue-500",
+                    newSegmentIds.has(segment.id) && "bg-green-50 border-l-green-500 animate-pulse",
+                    segment.completed === false && "bg-gray-100"
                   )}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm leading-relaxed">{segment.text}</p>
-                    <span className="text-xs text-gray-500 whitespace-nowrap flex items-center gap-0.5 ml-1 flex-shrink-0">
-                      <Clock className="h-3 w-3" />
-                      {formatTime(segment.timestamp)}
-                    </span>
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {segment.speaker && (
+                          <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                            {segment.speaker}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-500 whitespace-nowrap flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {formatTime(segment.timestamp)}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-800 mt-0.5">{segment.text}</p>
                   </div>
                 </div>
               ))}
             </div>
           )}
+        </div>
+        {/* Message input area pinned at the bottom of the card content */}
+        <div className="bg-white border-t border-gray-200 p-3">
+          <div className="flex items-center gap-2">
+            <Input
+              ref={messageInputRef}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Ask AI..."
+              className="flex-1"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  if (message.trim()) {
+                    console.log('Sending message:', message)
+                    setMessage('')
+                  }
+                }
+              }}
+            />
+            <Button 
+              size="icon" 
+              className="h-10 w-10 flex-shrink-0"
+              onClick={() => {
+                if (message.trim()) {
+                  console.log('Sending message:', message)
+                  setMessage('')
+                }
+              }}
+              disabled={!message.trim()}
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

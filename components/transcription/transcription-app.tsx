@@ -1,11 +1,12 @@
 "use client"
 
-import { useState } from "react"
+import React, { useEffect, useState } from "react"
 import { StartForm } from "./start-form"
 import { TranscriptionDisplay } from "./transcription-display"
 import { ApiStatus } from "./api-status"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
+import { getWebSocketService, TranscriptionSegment, TranscriptionEvent } from "../lib/websocket-service"
 
 interface TranscriptionAppProps {
   user: {
@@ -44,10 +45,10 @@ export function TranscriptionApp({ user }: TranscriptionAppProps) {
 
           <StartForm onStart={handleStart} isCollapsed={!!activeMeetingId} />
 
-          <TranscriptionDisplay 
-            meetingId={activeMeetingId} 
-            onStop={handleStop} 
-            isLive={true} 
+          <TranscriptionDisplay
+            meetingId={activeMeetingId}
+            onStop={handleStop}
+            isLive={true}
           />
         </CardContent>
       </Card>

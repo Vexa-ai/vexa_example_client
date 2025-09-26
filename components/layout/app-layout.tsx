@@ -7,6 +7,7 @@ import { TranscriptionDisplay } from "@/components/transcription/transcription-d
 import { Meeting } from "@/lib/transcription-service"
 import { ChevronRight, ChevronLeft, Menu } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { getWebSocketService } from "@/lib/websocket-service"
 
 interface AppLayoutProps {
   user: {
@@ -25,6 +26,13 @@ export function AppLayout({ user }: AppLayoutProps) {
     setActiveMeetingId(meetingId)
     setMode("live")
     console.log("Starting live transcription with meetingId:", meetingId);
+
+    // Ensure WebSocket service routes events only for the current meeting
+    const wsService = getWebSocketService()
+    // meetingId format is typically "platform/nativeMeetingId" -> use native part for WS
+    const parts = meetingId.split('/')
+    const nativeMeetingId = parts.length >= 2 ? parts[1] : meetingId
+    wsService.setCurrentMeetingId(nativeMeetingId)
   }
 
   const handleStopMeeting = () => {
@@ -33,16 +41,18 @@ export function AppLayout({ user }: AppLayoutProps) {
   }
 
   const handleSelectHistoricalMeeting = (meeting: Meeting) => {
-    // If the meeting is active, treat it as a live meeting
-    if (meeting.status === "active") {
-      console.log(`Meeting ${meeting.id} is active, switching to live mode`);
-      setActiveMeetingId(meeting.id)
-      setMode("live")
-    } else {
-      console.log(`Selected historical meeting: ${meeting.id}, status: ${meeting.status}`);
-      setSelectedHistoricalMeeting(meeting)
-      setMode("history")
-    }
+    // Treat selection as live immediately to avoid stale status race; WS/initial poll will drive UI state
+    console.log(`Selecting meeting ${meeting.id}, forcing live mode (status=${meeting.status})`);
+    setActiveMeetingId(meeting.id)
+    setMode("live")
+
+    // Save native meeting id for WebSocket filtering
+    const wsService = getWebSocketService()
+    console.log('[AppLayout] Setting currentMeetingId from selection:', meeting.native_meeting_id)
+    wsService.setCurrentMeetingId(meeting.native_meeting_id)
+
+    // Also keep reference for history view if needed later
+    setSelectedHistoricalMeeting(meeting)
   }
 
   const handleNewMeeting = () => {
@@ -50,7 +60,7 @@ export function AppLayout({ user }: AppLayoutProps) {
     setSelectedHistoricalMeeting(null)
     setMode("setup")
   }
-  
+
   // On small screens, automatically collapse sidebar for better UX
   useEffect(() => {
     const handleResize = () => {
@@ -58,28 +68,39 @@ export function AppLayout({ user }: AppLayoutProps) {
         setSidebarOpen(false)
       }
     }
-    
+
     // Initial check
     handleResize()
-    
+
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Listen for navigate-to-setup event (after removing transcription)
+  useEffect(() => {
+    const toSetup = () => {
+      setActiveMeetingId(null)
+      setSelectedHistoricalMeeting(null)
+      setMode("setup")
+    }
+    window.addEventListener('vexa:navigate-setup' as any, toSetup)
+    return () => window.removeEventListener('vexa:navigate-setup' as any, toSetup)
   }, [])
 
   return (
     <div className="flex h-screen overflow-hidden bg-white relative">
       {/* Mobile sidebar toggle button */}
-      <Button 
-        variant="ghost" 
+      <Button
+        variant="ghost"
         size="icon"
         onClick={() => setSidebarOpen(!sidebarOpen)}
         className="absolute top-2 left-2 z-50 md:hidden"
       >
         <Menu className="h-5 w-5" />
       </Button>
-      
+
       {/* Sidebar with responsive behavior */}
-      <div 
+      <div
         className={`
           transition-all duration-300 ease-in-out
           ${sidebarOpen ? 'w-64 opacity-100' : 'w-0 opacity-0 md:opacity-100 md:w-1'}
@@ -87,17 +108,17 @@ export function AppLayout({ user }: AppLayoutProps) {
         `}
       >
         {sidebarOpen && (
-          <Sidebar 
+          <Sidebar
             onNewMeeting={handleNewMeeting}
             onSelectMeeting={handleSelectHistoricalMeeting}
-            selectedMeetingId={mode === "history" ? selectedHistoricalMeeting?.id || null : 
+            selectedMeetingId={mode === "history" ? selectedHistoricalMeeting?.id || null :
                               mode === "live" ? activeMeetingId : null}
           />
         )}
-        
+
         {/* Desktop sidebar toggle */}
-        <Button 
-          variant="ghost" 
+        <Button
+          variant="ghost"
           size="icon"
           onClick={() => setSidebarOpen(!sidebarOpen)}
           className={`
@@ -109,7 +130,7 @@ export function AppLayout({ user }: AppLayoutProps) {
           {sidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </Button>
       </div>
-      
+
       {/* Main content area that expands when sidebar is collapsed */}
       <div className={`
         flex-1 overflow-hidden flex flex-col p-2 transition-all
@@ -118,8 +139,8 @@ export function AppLayout({ user }: AppLayoutProps) {
         <div className="max-w-4xl w-full mx-auto flex-1 flex flex-col h-full">
           {!sidebarOpen && (
             <div className="mb-1 flex justify-end">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 size="sm"
                 onClick={() => setSidebarOpen(true)}
                 className="hidden md:flex h-6 text-xs py-0 px-2"
@@ -130,16 +151,16 @@ export function AppLayout({ user }: AppLayoutProps) {
           )}
 
           {mode === "setup" && (
-            <StartForm 
-              onStart={handleStartMeeting} 
-              isCollapsed={false} 
+            <StartForm
+              onStart={handleStartMeeting}
+              isCollapsed={false}
             />
           )}
 
           {mode === "live" && activeMeetingId && (
             <div className="flex-1 flex flex-col h-full">
-              <TranscriptionDisplay 
-                meetingId={activeMeetingId} 
+              <TranscriptionDisplay
+                meetingId={activeMeetingId}
                 onStop={handleStopMeeting}
                 isLive={true}
               />
@@ -148,7 +169,7 @@ export function AppLayout({ user }: AppLayoutProps) {
 
           {mode === "history" && selectedHistoricalMeeting && (
             <div className="flex-1 flex flex-col h-full">
-              <TranscriptionDisplay 
+              <TranscriptionDisplay
                 meetingId={selectedHistoricalMeeting.id}
                 isLive={false}
                 title={selectedHistoricalMeeting.title || `Meeting ${selectedHistoricalMeeting.nativeMeetingId}`}
@@ -159,4 +180,4 @@ export function AppLayout({ user }: AppLayoutProps) {
       </div>
     </div>
   )
-} 
+}
