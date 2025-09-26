@@ -13,6 +13,7 @@ import {
   updateTranscriptionLanguage
 } from "@/lib/transcription-service"
 import { useWebSocket } from "@/lib/websocket-context"
+import { getWebSocketService } from "@/lib/websocket-service"
 import { useEffect, useRef, useState, useCallback } from "react"
 import { DownloadTranscript } from "./download-transcript"
 import { TranscriptSearch } from "./transcript-search"
@@ -218,7 +219,7 @@ export function TranscriptionDisplay({
   const [newSegmentIds, setNewSegmentIds] = useState<Set<string>>(new Set())
   const [selectedLanguage, setSelectedLanguage] = useState<string>("auto")
   const [isChangingLanguage, setIsChangingLanguage] = useState(false)
-  const { subscribeToMeeting, unsubscribeFromMeeting, onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
+  const { onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
   const pollingInterval = useRef<NodeJS.Timeout | null>(null)
   const transcriptionRef = useRef<HTMLDivElement>(null)
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -237,26 +238,7 @@ export function TranscriptionDisplay({
     }
   }, [newSegmentIds]);
 
-  // Function to subscribe to WebSocket updates for a meeting
-  const subscribeToWebSocketUpdates = async (internalMeetingId: number) => {
-    try {
-      await subscribeToMeeting(internalMeetingId)
-      console.log("Subscribed to WebSocket updates for meeting:", internalMeetingId)
-    } catch (err) {
-      console.error("Failed to subscribe to WebSocket:", err)
-      setError("Failed to connect to real-time updates.")
-    }
-  }
-
-  // Function to unsubscribe from WebSocket updates
-  const unsubscribeFromWebSocketUpdates = async (internalMeetingId: number) => {
-    try {
-      await unsubscribeFromMeeting(internalMeetingId)
-      console.log("Unsubscribed from WebSocket updates for meeting:", internalMeetingId)
-    } catch (err) {
-      console.error("Failed to unsubscribe from WebSocket:", err)
-    }
-  }
+  // No per-meeting subscribe/unsubscribe. Single connection; events filtered by current meeting id inside WS service.
 
   // Function to poll once for initial data on page load
   const pollOnceForInitialData = async () => {
@@ -280,24 +262,8 @@ export function TranscriptionDisplay({
 
       setTranscription(data)
 
-      // If meeting is active, subscribe to WebSocket updates
-      if (data.status === "active") {
-        // Extract internal meeting ID from the meetingId string
-        // meetingId format: "platform/nativeMeetingId" or "platform/nativeMeetingId/internalId"
-        const parts = meetingId.split('/');
-        if (parts.length >= 3) {
-          // Has internal ID
-          const internalMeetingId = parseInt(parts[2]);
-          if (!isNaN(internalMeetingId)) {
-            console.log("Subscribing to WebSocket for active meeting:", internalMeetingId);
-            await subscribeToWebSocketUpdates(internalMeetingId);
-          } else {
-            setError("Invalid meeting ID format for WebSocket connection");
-          }
-        } else {
-          setError("Meeting ID missing internal ID for WebSocket connection");
-        }
-      } else {
+      // No per-meeting subscription required; WS already connected
+      if (data.status !== "active") {
         console.log("Meeting not active, status:", data.status);
         if (data.status === "error") {
           setError("Transcription service reported an error. Please try again.")
@@ -341,6 +307,17 @@ export function TranscriptionDisplay({
     setSegments([])
     setTranscription(null)
     setError(null)
+    // Defensive: set WS current meeting id here as well (native part)
+    try {
+      if (meetingId) {
+        const parts = meetingId.split('/')
+        const nativeId = parts.length >= 2 ? parts[1] : meetingId
+        getWebSocketService().setCurrentMeetingId(nativeId)
+        console.log('[TranscriptionDisplay] Ensured currentMeetingId on mount/change:', nativeId)
+      }
+    } catch (e) {
+      console.error('Failed to set currentMeetingId in TranscriptionDisplay:', e)
+    }
     
     if (shouldDisplay) {
       if (isLive) {
@@ -357,44 +334,44 @@ export function TranscriptionDisplay({
 
   // Handle WebSocket transcript updates
   useEffect(() => {
-    const handleTranscriptUpdate = (meetingId: number, segments: any[]) => {
-      console.log("WebSocket transcript update:", segments.length, "segments")
-      
-      // Convert WebSocket segments to our format
-      const convertedSegments = segments.map(segment => ({
-        id: `${segment.start}-${segment.text.slice(0, 20).replace(/\s+/g, '-')}`,
-        text: segment.text || "",
-        timestamp: new Date(Date.now() - (Date.now() - segment.start * 1000)).toISOString(),
-        speaker: segment.speaker || "Unknown",
-      }))
-      
-      // Track new or changed segments for highlight effect
-      const changedSegmentIds = new Set<string>()
-      
-      setSegments((prevSegments) => {
-        const prevSegmentsMap = new Map(prevSegments.map(s => [s.id, s]))
-        
-        // Mark segments that are new or changed
-        convertedSegments.forEach(segment => {
-          const prevSegment = prevSegmentsMap.get(segment.id)
-          if (!prevSegment || prevSegment.text !== segment.text) {
-            changedSegmentIds.add(segment.id)
-          }
-        })
-        
-        if (changedSegmentIds.size > 0) {
-          console.log(`Found ${changedSegmentIds.size} new or updated segments via WebSocket`)
+    const wsService = getWebSocketService()
+
+    wsService.setOnTranscription((event: any) => {
+      const incomingSegments = (event.segments || []).map((segment: any) => {
+        const id = `${segment.start}-${segment.end}`
+        const timestamp = segment.absolute_start_time
+          ? segment.absolute_start_time
+          : new Date((segment.start || 0) * 1000).toISOString()
+        return {
+          id,
+          text: segment.text || "",
+          timestamp,
+          speaker: segment.speaker || "Unknown",
         }
-        
-        return [...convertedSegments].sort((a, b) => 
+      })
+
+      const changedIds = new Set<string>()
+
+      setSegments((prev) => {
+        const byId = new Map(prev.map(s => [s.id, s]))
+        for (const seg of incomingSegments) {
+          const existing = byId.get(seg.id)
+          if (!existing || existing.text !== seg.text) {
+            byId.set(seg.id, seg)
+            changedIds.add(seg.id)
+          }
+        }
+        const next = Array.from(byId.values()).sort((a, b) =>
           new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
         )
+        return next
       })
-      
-      if (changedSegmentIds.size > 0) {
-        setNewSegmentIds(changedSegmentIds)
+
+      if (changedIds.size > 0) {
+        console.log(`[WS] merged ${changedIds.size} segments into UI`)
+        setNewSegmentIds(changedIds)
       }
-    }
+    })
 
     const handleMeetingStatusUpdate = (meetingId: number, status: string) => {
       console.log("WebSocket meeting status:", status)
@@ -433,14 +410,7 @@ export function TranscriptionDisplay({
     try {
       setIsLoading(true)
 
-      // Unsubscribe from WebSocket updates
-      const parts = meetingId.split('/');
-      if (parts.length >= 3) {
-        const internalMeetingId = parseInt(parts[2]);
-        if (!isNaN(internalMeetingId)) {
-          await unsubscribeFromWebSocketUpdates(internalMeetingId);
-        }
-      }
+      // No per-meeting unsubscribe required
 
       await stopTranscription(meetingId)
       onStop()

@@ -1,12 +1,16 @@
 import { MOCK_MODE } from "./config"
 import { parseMeetingUrl } from "./utils"
-import { 
-  getWebSocketService, 
+import {
+  getWebSocketService,
   convertWebSocketSegment,
   type TranscriptMutableEvent,
   type TranscriptFinalizedEvent,
-  type MeetingStatusEvent 
+  type MeetingStatusEvent,
+  type SessionStartEvent,
+  type TranscriptionEvent
 } from "./websocket-service"
+
+export type AnyWebSocketEvent = SessionStartEvent | TranscriptionEvent | MeetingStatusEvent
 
 // Types for our transcription service
 export interface TranscriptionSegment {
@@ -28,6 +32,7 @@ export interface Meeting {
   id: string
   platformId: string
   nativeMeetingId: string
+  native_meeting_id: string
   platform: string
   status: "active" | "stopped" | "error"
   startTime: string
@@ -41,6 +46,7 @@ const mockMeetings: Meeting[] = [
     id: "mock-meeting-1",
     platformId: "google_meet",
     nativeMeetingId: "abc-defg-hij",
+    native_meeting_id: "abc-defg-hij",
     platform: "google_meet",
     status: "stopped",
     startTime: new Date(Date.now() - 86400000).toISOString(), // 1 day ago
@@ -51,6 +57,7 @@ const mockMeetings: Meeting[] = [
     id: "mock-meeting-2",
     platformId: "google_meet",
     nativeMeetingId: "xyz-uvwt-rst",
+    native_meeting_id: "xyz-uvwt-rst",
     platform: "google_meet",
     status: "stopped",
     startTime: new Date(Date.now() - 172800000).toISOString(), // 2 days ago
@@ -61,6 +68,7 @@ const mockMeetings: Meeting[] = [
     id: "mock-meeting-3",
     platformId: "google_meet",
     nativeMeetingId: "123-456-789",
+    native_meeting_id: "123-456-789",
     platform: "google_meet",
     status: "active",
     startTime: new Date().toISOString(),
@@ -112,14 +120,14 @@ let API_BASE_URL = "http://localhost:18056"
 async function handleApiResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))
-    
+
     // Specific handling for 409 conflict (existing bot)
     if (response.status === 409) {
       const error = new Error(`ExistingBotError: ${errorData.detail || "A bot is already running for this meeting"}`)
       error.name = "ExistingBotError"
       throw error
     }
-    
+
     throw new Error(`API error: ${response.status} ${response.statusText} - ${errorData.detail || errorData.message || "Unknown error"}`)
   }
   return response.json()
@@ -133,13 +141,13 @@ export function getApiKey(): string {
       // Direct approach to get a specific cookie
       const match = document.cookie.match(/(^|;)\s*vexa_api_key\s*=\s*([^;]+)/);
       const cookieValue = match ? decodeURIComponent(match[2]) : '';
-      
+
       if (cookieValue) {
         console.log("Found API key in cookies");
         return cookieValue;
       }
     }
-    
+
     // If we couldn't get from cookies, try environment variable
     const envKey = process.env.NEXT_PUBLIC_VEXA_API_KEY || '';
     return envKey;
@@ -157,10 +165,10 @@ export function setApiKey(key: string): void {
       const days = 30;
       const date = new Date();
       date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
-      
+
       // Simplified cookie setting with no spaces
       document.cookie = `vexa_api_key=${encodeURIComponent(key)};expires=${date.toUTCString()};path=/`;
-      
+
       // Immediately verify the cookie was set
       setTimeout(() => {
         const isSet = document.cookie.includes('vexa_api_key=');
@@ -191,7 +199,7 @@ export function setApiBaseUrl(url: string): void {
       const days = 30;
       const date = new Date();
       date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
-      
+
       document.cookie = `vexa_api_base_url=${encodeURIComponent(url)};expires=${date.toUTCString()};path=/`;
       console.log("API base URL cookie set");
     }
@@ -206,13 +214,13 @@ export function getApiBaseUrl(): string {
     if (typeof window !== 'undefined') {
       const match = document.cookie.match(/(^|;)\s*vexa_api_base_url\s*=\s*([^;]+)/);
       const cookieValue = match ? decodeURIComponent(match[2]) : '';
-      
+
       if (cookieValue) {
         console.log("Found API base URL in cookies");
         return cookieValue;
       }
     }
-    
+
     // If we couldn't get from cookies, try environment variable or use default
     const envUrl = process.env.NEXT_PUBLIC_VEXA_API_URL || 'http://localhost:18056';
     return envUrl;
@@ -229,7 +237,7 @@ export function setWebSocketUrl(url: string): void {
       const days = 30;
       const date = new Date();
       date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
-      
+
       document.cookie = `vexa_ws_url=${encodeURIComponent(url)};expires=${date.toUTCString()};path=/`;
       console.log("WebSocket URL cookie set");
     }
@@ -244,13 +252,13 @@ export function getWebSocketUrl(): string {
     if (typeof window !== 'undefined') {
       const match = document.cookie.match(/(^|;)\s*vexa_ws_url\s*=\s*([^;]+)/);
       const cookieValue = match ? decodeURIComponent(match[2]) : '';
-      
+
       if (cookieValue) {
         console.log("Found WebSocket URL in cookies");
         return cookieValue;
       }
     }
-    
+
     // If we couldn't get from cookies, try environment variable or use default
     const envUrl = process.env.NEXT_PUBLIC_VEXA_WS_URL || 'ws://localhost:18056/ws';
     return envUrl;
@@ -265,10 +273,10 @@ function getHeaders() {
   // Get the API key and base URL
   const apiKey = getApiKey();
   const baseUrl = getApiBaseUrl();
-  
+
   // Update the global API_BASE_URL
   API_BASE_URL = baseUrl;
-  
+
   // Add extensive logging
   console.log("Building API headers");
   console.log("Has API key:", !!apiKey);
@@ -277,16 +285,16 @@ function getHeaders() {
     // Only log part of the key for security
     console.log("API key starts with:", apiKey.substring(0, 4));
   }
-  
+
   // Create headers with mandatory fields
   const headers = {
     "Content-Type": "application/json",
     "X-API-Key": apiKey
   };
-  
+
   // Log what's being sent
   console.log("Headers being sent:", JSON.stringify(headers));
-  
+
   return headers;
 }
 
@@ -326,7 +334,7 @@ export async function startTranscription(
   try {
     // Parse the meeting URL to get platform and native meeting ID
     const { platform, nativeMeetingId } = parseMeetingUrl(meetingUrl)
-    
+
     // Build request payload for /bots endpoint
     const requestPayload: {
       platform: string;
@@ -338,7 +346,7 @@ export async function startTranscription(
       native_meeting_id: nativeMeetingId,
       bot_name: botName
     }
-    
+
     // Only include language if it's not set to auto (to enable auto-detection)
     if (language !== "auto") {
       requestPayload.language = language;
@@ -388,7 +396,7 @@ export async function stopTranscription(meetingId: string): Promise<{ success: b
     if (parts.length < 2) {
       throw new Error("Invalid meeting ID format")
     }
-    
+
     const platform = parts[0];
     const nativeMeetingId = parts[1];
 
@@ -435,7 +443,7 @@ export async function updateTranscriptionLanguage(meetingId: string, language: s
     if (parts.length < 2) {
       throw new Error("Invalid meeting ID format")
     }
-    
+
     const platform = parts[0];
     const nativeMeetingId = parts[1];
 
@@ -500,16 +508,16 @@ export async function getTranscription(meetingId: string): Promise<Transcription
   // Real API implementation using Vexa API
   try {
     console.log("getTranscription called with meetingId:", meetingId);
-    
+
     // The meetingId can be in format "platform/nativeMeetingId" or "platform/nativeMeetingId/id"
     const parts = meetingId.split('/');
     if (parts.length < 2) {
       throw new Error("Invalid meeting ID format")
     }
-    
+
     const platform = parts[0];
     const nativeMeetingId = parts[1];
-    
+
     console.log(`Fetching transcript for platform=${platform}, nativeMeetingId=${nativeMeetingId}`);
 
     const response = await fetch(`${API_BASE_URL}/transcripts/${platform}/${nativeMeetingId}`, {
@@ -518,10 +526,10 @@ export async function getTranscription(meetingId: string): Promise<Transcription
     })
 
     console.log("Transcript API response status:", response.status);
-    
+
     const data = await handleApiResponse<any>(response)
     console.log("Transcript API data received:", JSON.stringify(data).substring(0, 200) + "...");
-    
+
     // Check if data contains segments directly
     if (!data.segments && !data.transcript) {
       console.error("API response missing segments data:", data);
@@ -542,7 +550,7 @@ export async function getTranscription(meetingId: string): Promise<Transcription
         const segmentText = segment.text || "";
         const timestamp = segment.absolute_start_time || segment.timestamp || new Date().toISOString();
         const stableId = `${timestamp}-${segmentText.slice(0, 20).replace(/\s+/g, '-')}`;
-        
+
         return {
           id: stableId,
           text: segmentText,
@@ -594,13 +602,13 @@ export async function getFullTranscript(
     if (parts.length < 2) {
       throw new Error("Invalid meeting ID format")
     }
-    
+
     const platform = parts[0];
     const nativeMeetingId = parts[1];
 
     // Get the latest transcript data
     const transcriptionData = await getTranscription(meetingId)
-    
+
     // Combine all segment texts
     const text = transcriptionData.segments.map(segment => segment.text).join(" ")
 
@@ -638,6 +646,7 @@ export async function getMeetingHistory(): Promise<Meeting[]> {
       id: `${meeting.platform}/${meeting.native_meeting_id}/${meeting.id}`,
       platformId: meeting.platform,
       nativeMeetingId: meeting.native_meeting_id,
+      native_meeting_id: meeting.native_meeting_id,
       platform: meeting.platform,
       status: meeting.status || "stopped",
       startTime: meeting.start_time || new Date().toISOString(),
@@ -673,14 +682,14 @@ export async function startWebSocketTranscription(
 
   // Set up event handlers
   wsService.setOnTranscriptMutable((event: TranscriptMutableEvent) => {
-    const segments = event.payload.segments.map(segment => 
+    const segments = event.payload.segments.map(segment =>
       convertWebSocketSegment(segment, meetingId.toString())
     )
     onTranscriptMutable(segments)
   })
 
   wsService.setOnTranscriptFinalized((event: TranscriptFinalizedEvent) => {
-    const segments = event.payload.segments.map(segment => 
+    const segments = event.payload.segments.map(segment =>
       convertWebSocketSegment(segment, meetingId.toString())
     )
     onTranscriptFinalized(segments)
@@ -708,11 +717,11 @@ export async function startWebSocketTranscription(
  */
 export async function stopWebSocketTranscription(meetingId: number): Promise<void> {
   const wsService = getWebSocketService()
-  
+
   if (wsService.isConnected()) {
     await wsService.unsubscribeFromMeeting(meetingId)
   }
-  
+
   // If no more meetings are subscribed, disconnect
   const subscribedMeetings = wsService.getSubscribedMeetings()
   if (subscribedMeetings.length === 0) {
@@ -737,7 +746,7 @@ export function getWebSocketStatus(): { connected: boolean; subscribedMeetings: 
  */
 export async function getMeetingTranscript(meetingId: string): Promise<TranscriptionData> {
   // This is similar to getTranscription but without adding new simulated segments in mock mode
-  
+
   // Use mock implementation if in mock mode
   if (MOCK_MODE) {
     await new Promise((resolve) => setTimeout(resolve, 800)) // Simulate API delay
@@ -746,7 +755,7 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
     if (!mockTranscriptionData[meetingId]) {
       // Find the mock meeting by ID
       const mockMeeting = mockMeetings.find(m => m.id === meetingId);
-      
+
       if (mockMeeting) {
         // Create mock transcript for this meeting
         mockTranscriptionData[meetingId] = {
@@ -774,10 +783,10 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
   // Real API implementation using Vexa API
   try {
     console.log("getMeetingTranscript called with meetingId:", meetingId);
-    
+
     // Check if the meetingId is already in the format "platform/nativeMeetingId" or "platform/nativeMeetingId/id"
     let platform, nativeMeetingId;
-    
+
     const parts = meetingId.split('/');
     if (parts.length >= 2) {
       platform = parts[0];
@@ -788,7 +797,7 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
       console.log("Invalid meeting ID format, trying to fetch meeting details");
       const meetings = await getMeetingHistory();
       const meeting = meetings.find(m => m.id === meetingId);
-      
+
       if (meeting) {
         platform = meeting.platform;
         nativeMeetingId = meeting.nativeMeetingId;
@@ -797,7 +806,7 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
         throw new Error("Meeting not found")
       }
     }
-    
+
     if (!platform || !nativeMeetingId) {
       throw new Error("Invalid meeting ID format")
     }
@@ -832,7 +841,7 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
         const segmentText = segment.text || "";
         const timestamp = segment.absolute_start_time || segment.timestamp || new Date().toISOString();
         const stableId = `${timestamp}-${segmentText.slice(0, 20).replace(/\s+/g, '-')}`;
-        
+
         return {
           id: stableId,
           text: segmentText,

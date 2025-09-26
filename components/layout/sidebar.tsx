@@ -9,6 +9,7 @@ import { Meeting, getMeetingHistory } from "@/lib/transcription-service"
 import { cn } from "@/lib/utils"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useWebSocket } from "@/lib/websocket-context"
+import { getWebSocketService } from "@/lib/websocket-service"
 import Link from "next/link"
 import Image from "next/image"
 
@@ -26,16 +27,18 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
   const [isRefreshing, setIsRefreshing] = useState(false)
   const { onMeetingStatusChange, offMeetingStatusChange } = useWebSocket()
 
+  const wsService = getWebSocketService()
+
   const loadMeetings = async () => {
     setIsLoading(true)
     setError(null)
-    
+
     try {
       const fetchedMeetings = await getMeetingHistory()
-      
+
       // Filter out meetings with "error" status
       const filteredMeetings = fetchedMeetings.filter(meeting => meeting.status !== "error")
-      
+
       // Sort meetings by startTime (most recent first)
       const sortedMeetings = filteredMeetings
         .sort((a, b) => {
@@ -64,14 +67,14 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
   // Handle WebSocket meeting status updates
   const handleMeetingStatusUpdate = useCallback((meetingId: number, status: string) => {
     console.log(`Sidebar received status update: meeting ${meetingId} -> ${status}`)
-    
+
     setMeetings(prevMeetings => {
       return prevMeetings.map(meeting => {
         // Extract internal meeting ID from the meeting.id string
         // Format: "platform/nativeMeetingId/internalId"
         const parts = meeting.id.split('/')
         const internalId = parts.length >= 3 ? parseInt(parts[2]) : null
-        
+
         if (internalId === meetingId) {
           console.log(`Updating meeting ${meeting.id} status from ${meeting.status} to ${status}`)
           return { ...meeting, status: status as any }
@@ -88,7 +91,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
   // Subscribe to WebSocket status updates
   useEffect(() => {
     onMeetingStatusChange(handleMeetingStatusUpdate)
-    
+
     return () => {
       offMeetingStatusChange(handleMeetingStatusUpdate)
     }
@@ -110,18 +113,18 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
 
   const formatDate = (dateString: string | undefined) => {
     if (!dateString) return "Unknown date"
-    
+
     try {
       const date = new Date(dateString)
       // Format: "Today, 2:30 PM" or "Jan 5, 2:30 PM"
       const today = new Date()
-      const isToday = date.getDate() === today.getDate() && 
-                      date.getMonth() === today.getMonth() && 
+      const isToday = date.getDate() === today.getDate() &&
+                      date.getMonth() === today.getMonth() &&
                       date.getFullYear() === today.getFullYear()
-      
+
       const timeOptions: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' }
       const time = date.toLocaleTimeString(undefined, timeOptions)
-      
+
       if (isToday) {
         return `Today, ${time}`
       } else {
@@ -153,20 +156,20 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
             </Link>
           </div>
         </div>
-        
+
         <div className="flex justify-between items-center mb-4">
           <Button onClick={onNewMeeting} variant="default" className="w-full">
             <PlusCircle className="mr-2 h-4 w-4" />
             New Meeting
           </Button>
         </div>
-        
+
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-medium text-gray-500">Meeting History</h3>
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            className="h-6 w-6" 
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
             onClick={handleRefresh}
             disabled={isRefreshing}
           >
@@ -177,7 +180,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
           </Button>
         </div>
       </div>
-      
+
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         {isLoading ? (
           <div className="space-y-2">
@@ -197,9 +200,18 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
         ) : (
           <div className="space-y-1">
             {meetings.map((meeting) => (
-              <div 
-                key={meeting.id} 
-                onClick={() => onSelectMeeting(meeting)}
+              <div
+                key={meeting.id}
+                onClick={() => {
+                  try {
+                    // Set current meeting id for WS immediately to avoid races
+                    wsService.setCurrentMeetingId(meeting.native_meeting_id)
+                    console.log('[Sidebar] Set currentMeetingId on click:', meeting.native_meeting_id)
+                  } catch (e) {
+                    console.error('Failed to set currentMeetingId from sidebar:', e)
+                  }
+                  onSelectMeeting(meeting)
+                }}
                 className={cn(
                   "flex items-center justify-between p-2 rounded-md cursor-pointer",
                   "hover:bg-gray-200 transition-colors",
@@ -217,7 +229,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
                     </div>
                   </div>
                 </div>
-                
+
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -242,4 +254,4 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
       </div>
     </div>
   )
-} 
+}
