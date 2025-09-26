@@ -106,8 +106,8 @@ const mockSegments: TranscriptionSegment[] = [
 // Mock data storage
 const mockTranscriptionData: Record<string, TranscriptionData> = {}
 
-// Vexa API configuration - will be set dynamically based on user settings
-let API_BASE_URL = "http://localhost:18056"
+// Vexa API configuration - uses environment variable with fallback to development server
+let API_BASE_URL = process.env.NEXT_PUBLIC_VEXA_API_URL || "http://localhost:18056"
 
 // Helper function to handle API responses
 async function handleApiResponse<T>(response: Response): Promise<T> {
