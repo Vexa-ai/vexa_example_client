@@ -1,6 +1,5 @@
 // Added import for getWebSocketService for onSelectMeeting function
 import { getApiKey, getWebSocketUrl } from "./transcription-service"
-import { getWebSocketService } from "./websocket-service"
 
 // WebSocket event types
 export interface WebSocketEvent {
@@ -123,6 +122,11 @@ export class TranscriptionWebSocketService {
       return
     }
 
+    // Check if WebSocket is supported
+    if (typeof WebSocket === 'undefined') {
+      throw new Error("WebSocket is not supported in this environment")
+    }
+
     this.isConnecting = true
 
     try {
@@ -137,10 +141,10 @@ export class TranscriptionWebSocketService {
       console.log("Connecting to WebSocket:", url.replace(apiKey, "***"))
 
       this.ws = new WebSocket(url)
-      this.ws.onopen = this.handleOpen
-      this.ws.onmessage = this.handleMessage
-      this.ws.onclose = this.handleClose
-      this.ws.onerror = this.handleError
+      this.ws.onopen = this.handleOpen.bind(this)
+      this.ws.onmessage = this.handleMessage.bind(this)
+      this.ws.onclose = this.handleClose.bind(this)
+      this.ws.onerror = this.handleError.bind(this)
 
       const connectionTimeout = setTimeout(() => {
         if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
@@ -234,7 +238,7 @@ export class TranscriptionWebSocketService {
           this.onMeetingStatus?.(data as MeetingStatusEvent)
           break
         default:
-          console.warn("Ignoring unsupported WebSocket event type:", data.type)
+          console.warn("Ignoring unsupported WebSocket event type:", (data as any).type)
           break
       }
     } catch (error) {
@@ -260,8 +264,17 @@ export class TranscriptionWebSocketService {
   }
 
   private handleError(error: Event): void {
-    console.error("WebSocket error:", error)
+    console.info("WebSocket error:", error)
+    console.info("WebSocket readyState:", this.ws?.readyState)
+    console.info("WebSocket URL:", this.ws?.url)
     this.isConnecting = false
+    
+    // Try to reconnect on error if not already attempting
+    if (this.reconnectAttempts < this.maxReconnectAttempts && !this.isConnecting) {
+      console.log("Attempting to reconnect due to error...")
+      this.attemptReconnect()
+    }
+    
     this.onError?.(error)
   }
 

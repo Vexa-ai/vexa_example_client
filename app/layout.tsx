@@ -24,7 +24,7 @@ export default function RootLayout({
       <head>
         <link rel="icon" href="/logodark.svg" type="image/svg+xml" />
       </head>
-      <body className={inter.className}>
+      <body className={inter.className} suppressHydrationWarning>
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} disableTransitionOnChange>
           <WebSocketProvider>
             {children}
