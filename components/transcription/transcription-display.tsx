@@ -11,7 +11,8 @@ import {
   stopTranscription,
   getMeetingTranscript,
   updateTranscriptionLanguage,
-  removeMeeting
+  removeMeeting,
+  getApiKey
 } from "@/lib/transcription-service"
 import { useWebSocket } from "@/lib/websocket-context"
 import { getWebSocketService } from "@/lib/websocket-service"
@@ -221,6 +222,7 @@ export function TranscriptionDisplay({
   const [newSegmentIds, setNewSegmentIds] = useState<Set<string>>(new Set())
   const [selectedLanguage, setSelectedLanguage] = useState<string>("auto")
   const [message, setMessage] = useState("")
+  const [isSendingAI, setIsSendingAI] = useState(false)
   const messageInputRef = useRef<HTMLInputElement>(null)
   const [isChangingLanguage, setIsChangingLanguage] = useState(false)
   const [meetingStatus, setMeetingStatus] = useState<string | null>(null)
@@ -231,6 +233,7 @@ export function TranscriptionDisplay({
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const retryCount = useRef(0)
   const MAX_RETRIES = 3
+  const [renderCount, setRenderCount] = useState(100)
 
   const shouldDisplay = !!meetingId
 
@@ -492,6 +495,7 @@ export function TranscriptionDisplay({
       // No per-meeting unsubscribe required
 
       await stopTranscription(meetingId)
+      // Do not update status optimistically. Wait for socket events (meeting_status/session_end).
       onStop()
     } catch (err) {
       console.error("Error stopping transcription:", err)
@@ -523,6 +527,35 @@ export function TranscriptionDisplay({
       setError("Failed to update language. Please try again.");
     } finally {
       setIsChangingLanguage(false);
+    }
+  }
+
+  const sendAiQuery = async () => {
+    if (!message.trim() || !meetingId) return
+    try {
+      setIsSendingAI(true)
+      const [platform, nativeMeetingId] = meetingId.split('/')
+      const meetingPayload = {
+        id: meetingId,
+        platform,
+        native_meeting_id: nativeMeetingId,
+        status: meetingStatus,
+        title: title,
+      }
+      const token = getApiKey()
+      const auth = typeof window !== 'undefined' ? btoa('symfa:u8Oons4ZXkcibowe') : ''
+      await fetch('/api/ask-ai', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query: message.trim(), token, meeting: meetingPayload }),
+      })
+      setMessage("")
+    } catch (e) {
+      console.error('Failed to send Ask AI query', e)
+    } finally {
+      setIsSendingAI(false)
     }
   }
 
@@ -645,7 +678,14 @@ export function TranscriptionDisplay({
             </div>
           ) : (
             <div className="space-y-1 font-light text-gray-800 pb-2">
-              {segments.map((segment) => (
+              {segments.length > renderCount && (
+                <div className="flex justify-center py-1">
+                  <Button variant="outline" size="sm" className="h-6 text-xs py-0 px-2" onClick={() => setRenderCount(c => c + 500)}>
+                    Load older messages
+                  </Button>
+                </div>
+              )}
+              {(segments.length > renderCount ? segments.slice(segments.length - renderCount) : segments).map((segment) => (
                 <div
                   key={segment.id}
                   ref={el => { segmentRefs.current[segment.id] = el; }}
@@ -689,23 +729,15 @@ export function TranscriptionDisplay({
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
-                  if (message.trim()) {
-                    console.log('Sending message:', message)
-                    setMessage('')
-                  }
+                  sendAiQuery()
                 }
               }}
             />
             <Button 
               size="icon" 
               className="h-10 w-10 flex-shrink-0"
-              onClick={() => {
-                if (message.trim()) {
-                  console.log('Sending message:', message)
-                  setMessage('')
-                }
-              }}
-              disabled={!message.trim()}
+              onClick={sendAiQuery}
+              disabled={!message.trim() || isSendingAI}
             >
               <Send className="h-4 w-4" />
             </Button>

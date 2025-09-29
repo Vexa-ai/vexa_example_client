@@ -18,6 +18,22 @@ export interface SessionStartEvent extends WebSocketEvent {
   start_timestamp: string
 }
 
+export interface SessionEndEvent extends WebSocketEvent {
+  type: "session_end"
+  id: number
+  user_id: number
+  platform: string
+  native_meeting_id: string
+  constructed_meeting_url: string
+  status: string
+  bot_container_id: string
+  start_time: string
+  end_time: string
+  data: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
 export interface TranscriptionSegment {
   start: number
   end: number
@@ -46,7 +62,7 @@ export interface MeetingStatusEvent extends WebSocketEvent {
   }
 }
 
-export type AnyWebSocketEvent = SessionStartEvent | TranscriptionEvent | MeetingStatusEvent
+export type AnyWebSocketEvent = SessionStartEvent | SessionEndEvent | TranscriptionEvent | MeetingStatusEvent
 
 export function convertWebSocketSegment(segment: any, meetingId: string) {
   return {
@@ -66,10 +82,12 @@ export class TranscriptionWebSocketService {
   private reconnectDelay = 1000
   private pingInterval: NodeJS.Timeout | null = null
   private isConnecting = false
+  private manualCloseRequested = false
 
   private currentMeetingId: string | null = null
 
   private onSessionStart?: (event: SessionStartEvent) => void
+  private onSessionEnd?: (event: SessionEndEvent) => void
   private onTranscription?: (event: TranscriptionEvent) => void
   private onError?: (error: Event | Error) => void
   private onConnected?: () => void
@@ -95,6 +113,10 @@ export class TranscriptionWebSocketService {
 
   setOnSessionStart(handler: (event: SessionStartEvent) => void) {
     this.onSessionStart = handler
+  }
+
+  setOnSessionEnd(handler: (event: SessionEndEvent) => void) {
+    this.onSessionEnd = handler
   }
 
   setOnTranscription(handler: (event: TranscriptionEvent) => void) {
@@ -170,6 +192,7 @@ export class TranscriptionWebSocketService {
   }
 
   disconnect(): void {
+    this.manualCloseRequested = true
     if (this.pingInterval) {
       clearInterval(this.pingInterval)
       this.pingInterval = null
@@ -182,6 +205,8 @@ export class TranscriptionWebSocketService {
 
     this.reconnectAttempts = 0
     this.isConnecting = false
+    // reset the manual flag shortly after to avoid affecting future sessions
+    setTimeout(() => { this.manualCloseRequested = false }, 0)
   }
 
   isConnected(): boolean {
@@ -210,6 +235,9 @@ export class TranscriptionWebSocketService {
       switch (data.type) {
         case "session_start":
           this.onSessionStart?.(data as SessionStartEvent)
+          break
+        case "session_end":
+          this.onSessionEnd?.(data as SessionEndEvent)
           break
         case "transcription": {
           const transcriptionEvent = data as TranscriptionEvent
@@ -258,7 +286,8 @@ export class TranscriptionWebSocketService {
 
     this.onDisconnected?.()
 
-    if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
+    // Reconnect unless we explicitly requested a disconnect
+    if (!this.manualCloseRequested && this.reconnectAttempts < this.maxReconnectAttempts) {
       this.attemptReconnect()
     }
   }

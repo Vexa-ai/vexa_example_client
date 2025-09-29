@@ -53,6 +53,15 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       } catch {}
     })
 
+    // Broadcast session_end to update status to completed globally
+    wsService.setOnSessionEnd((event: any) => {
+      try {
+        const platform = event.platform
+        const nativeMeetingId = event.native_meeting_id
+        window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { platform, nativeMeetingId, status: 'completed' } }))
+      } catch {}
+    })
+
     // Connect to WebSocket on mount
     wsService.connect().catch(console.error)
 

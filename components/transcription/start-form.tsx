@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { startTranscription, stopTranscription } from "@/lib/transcription-service"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { parseMeetingUrl } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
@@ -22,7 +22,7 @@ interface StartFormProps {
 export function StartForm({ onStart, isCollapsed }: StartFormProps) {
   const [meetingUrl, setMeetingUrl] = useState("")
   const [language, setLanguage] = useState("auto")
-  const [botName, setBotName] = useState("Vexa")
+  const [botName, setBotName] = useState("Symfa Note Taker")
   const [isLoading, setIsLoading] = useState(false)
   const [isStoppingBot, setIsStoppingBot] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -35,6 +35,21 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
   if (isCollapsed) {
     return null
   }
+
+  // Load bot name from local storage on mount
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const stored = localStorage.getItem('vexa_bot_name')
+        if (stored && stored.trim()) {
+          setBotName(stored)
+        } else {
+          // ensure default is saved for next time
+          localStorage.setItem('vexa_bot_name', 'Symfa Note Taker')
+        }
+      }
+    } catch {}
+  }, [])
 
   const handleStopExistingBot = async () => {
     if (!existingBotInfo) return;
@@ -71,8 +86,8 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
 
     setIsLoading(true)
     try {
-      // Assuming startTranscription now takes the cleaned URL
-      const { meetingId, createdMeeting } = await startTranscription(cleanUrl)
+      // Start with selected language and saved bot name
+      const { meetingId, createdMeeting } = await startTranscription(cleanUrl, language, botName)
       toast({
         title: "Transcription Started",
         description: `Meeting ID: ${meetingId}`,
@@ -155,7 +170,15 @@ export function StartForm({ onStart, isCollapsed }: StartFormProps) {
               id="bot-name"
               placeholder="Vexa"
               value={botName}
-              onChange={(e) => setBotName(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value
+                setBotName(value)
+                try {
+                  if (typeof window !== 'undefined') {
+                    localStorage.setItem('vexa_bot_name', value || 'Symfa Note Taker')
+                  }
+                } catch {}
+              }}
               className="focus:ring-2 focus:ring-offset-1 focus:ring-blue-500"
             />
             <p className="text-xs text-muted-foreground mt-1">

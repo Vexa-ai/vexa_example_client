@@ -36,8 +36,8 @@ export function AppLayout({ user }: AppLayoutProps) {
   }
 
   const handleStopMeeting = () => {
-    setActiveMeetingId(null)
-    setMode("setup")
+    // Do not navigate away; keep current meeting open. Status will update via WS/events.
+    console.log('[AppLayout] Stop Bot requested - staying on current meeting view')
   }
 
   const handleSelectHistoricalMeeting = (meeting: Meeting) => {
