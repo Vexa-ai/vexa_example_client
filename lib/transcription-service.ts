@@ -537,9 +537,12 @@ export async function getTranscription(meetingId: string): Promise<Transcription
 
     console.log(`Fetching transcript for platform=${platform}, nativeMeetingId=${nativeMeetingId}`);
 
-    const response = await fetch(`${API_BASE_URL}/transcripts/${platform}/${nativeMeetingId}`, {
+    const apiKey = getApiKey();
+    const response = await fetch(`/api/transcription-notes/${platform}/${nativeMeetingId}/${apiKey}`, {
       method: "GET",
-      headers: getHeaders(),
+      headers: {
+        "Content-Type": "application/json",
+      },
     })
 
     console.log("Transcript API response status:", response.status);
@@ -833,9 +836,12 @@ export async function getMeetingTranscript(meetingId: string): Promise<Transcrip
     }
 
     console.log(`Fetching transcript for platform=${platform}, nativeMeetingId=${nativeMeetingId}`);
-    const response = await fetch(`${API_BASE_URL}/transcripts/${platform}/${nativeMeetingId}`, {
+    const apiKey = getApiKey();
+    const response = await fetch(`/api/transcription-notes/${platform}/${nativeMeetingId}/${apiKey}`, {
       method: "GET",
-      headers: getHeaders(),
+      headers: {
+        "Content-Type": "application/json",
+      },
     })
 
     console.log("Transcript API response status:", response.status);

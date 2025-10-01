@@ -124,10 +124,8 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
         return m
       })
       setMeetings(next)
-      if (!matched) {
-        // Fallback: refresh list to capture new status if item wasn't loaded yet
-        handleRefresh().catch(() => {})
-      }
+      // Don't refresh the entire list if meeting not found - this causes flickering
+      // The meeting will be loaded when user clicks on it
     }
     window.addEventListener('vexa:meeting-updated' as any, handleUpdated)
     return () => window.removeEventListener('vexa:meeting-updated' as any, handleUpdated)
@@ -193,13 +191,10 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
     <div className="h-full w-full border-r border-gray-200 bg-gray-50 flex flex-col">
       <div className="p-4">
         <div className="flex justify-between items-center mb-4">
-          <Link href="https://vexa.ai" target="_blank" rel="noopener noreferrer">
-            <Image src="/logodark.svg" alt="Vexa Logo" width={30} height={24} />
+          <Link href="https://symfa.com" target="_blank" rel="noopener noreferrer">
+            <Image src="/logo.png" alt="Logo" width={30} height={24} className="rounded-md" />
           </Link>
           <div className="flex items-center space-x-2">
-            <Link href="https://github.com/Vexa-ai/vexa_example_client" target="_blank" rel="noopener noreferrer" title="Fork me on GitHub">
-              <Image src="/icons8-github.svg" alt="GitHub Logo" width={30} height={30} />
-            </Link>
             <Link href="/settings">
               <Button variant="ghost" size="icon" className="h-8 w-8" title="API Settings">
                 <Settings className="h-4 w-4" />

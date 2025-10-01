@@ -143,15 +143,7 @@ export function ApiKeySettings() {
           <AlertCircle className="h-4 w-4 text-blue-500" />
           <AlertTitle>Need an API key?</AlertTitle>
           <AlertDescription className="flex flex-col">
-            <p>You can obtain your Vexa API key from the Vexa dashboard.</p>
-            <a 
-              href="https://vexa.ai/dashboard/api-keys" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-blue-600 hover:text-blue-800 flex items-center mt-2 w-fit"
-            >
-              Go to Vexa Dashboard <ExternalLink className="ml-1 h-3 w-3" />
-            </a>
+            <p>You can request an API key from the Symfa administrator.</p>
           </AlertDescription>
         </Alert>
         

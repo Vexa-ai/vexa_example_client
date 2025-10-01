@@ -234,8 +234,58 @@ export function TranscriptionDisplay({
   const retryCount = useRef(0)
   const MAX_RETRIES = 3
   const [renderCount, setRenderCount] = useState(100)
+  const detailsPollingInterval = useRef<NodeJS.Timeout | null>(null)
 
   const shouldDisplay = !!meetingId
+  
+  // Debug flag - set to false in production to reduce console noise
+  const DEBUG_SPEAKER_UPDATES = process.env.NODE_ENV === 'development'
+
+  // Speaker color mapping
+  const SPEAKER_COLORS = [
+    'text-blue-600 bg-blue-50',
+    'text-green-600 bg-green-50', 
+    'text-purple-600 bg-purple-50',
+    'text-orange-600 bg-orange-50',
+    'text-pink-600 bg-pink-50',
+    'text-indigo-600 bg-indigo-50',
+    'text-red-600 bg-red-50',
+    'text-yellow-600 bg-yellow-50',
+    'text-teal-600 bg-teal-50',
+    'text-cyan-600 bg-cyan-50',
+    'text-emerald-600 bg-emerald-50',
+    'text-violet-600 bg-violet-50',
+    'text-rose-600 bg-rose-50',
+    'text-lime-600 bg-lime-50',
+    'text-amber-600 bg-amber-50',
+    'text-sky-600 bg-sky-50',
+    'text-fuchsia-600 bg-fuchsia-50',
+    'text-slate-600 bg-slate-50',
+    'text-gray-600 bg-gray-50',
+    'text-zinc-600 bg-zinc-50'
+  ]
+
+  const SPECIAL_SPEAKER_COLORS: Record<string, string> = {
+    'Agent': 'text-green-700 bg-green-100',
+    'Unknown': 'text-gray-600 bg-gray-100'
+  }
+
+  const getSpeakerColor = (speaker: string): string => {
+    if (SPECIAL_SPEAKER_COLORS[speaker]) {
+      return SPECIAL_SPEAKER_COLORS[speaker]
+    }
+    
+    // Generate consistent color based on speaker name hash
+    let hash = 0
+    for (let i = 0; i < speaker.length; i++) {
+      const char = speaker.charCodeAt(i)
+      hash = ((hash << 5) - hash) + char
+      hash = hash & hash // Convert to 32-bit integer
+    }
+    
+    const colorIndex = Math.abs(hash) % SPEAKER_COLORS.length
+    return SPEAKER_COLORS[colorIndex]
+  }
 
   // Clear highlight effect after a delay
   useEffect(() => {
@@ -248,6 +298,199 @@ export function TranscriptionDisplay({
   }, [newSegmentIds]);
 
   // No per-meeting subscribe/unsubscribe. Single connection; events filtered by current meeting id inside WS service.
+
+  // Function to update speaker information in existing segments
+  const updateSegmentsWithSpeakers = (apiSegments: TranscriptionSegment[]) => {
+    setSegments((prevSegments) => {
+      const updatedSegments = [...prevSegments]
+      let hasUpdates = false
+      let updateCount = 0
+      let removedCount = 0
+
+      console.log("updateSegmentsWithSpeakers - current segments:", prevSegments.length, "API segments:", apiSegments.length)
+
+      // Create a map of API segments by start and end time for quick lookup
+      const apiSegmentsMap = new Map<string, TranscriptionSegment>()
+      apiSegments.forEach((segment, index) => {
+        if (segment.start !== undefined) {
+          const startKey = `start:${segment.start.toFixed(3)}`
+          apiSegmentsMap.set(startKey, segment)
+        }
+        if (segment.end !== undefined) {
+          const endKey = `end:${segment.end.toFixed(3)}`
+          apiSegmentsMap.set(endKey, segment)
+        }
+        // Only log individual segments if there are few (for debugging)
+        if (DEBUG_SPEAKER_UPDATES && apiSegments.length <= 20) {
+          console.log(`API segment ${index}: speaker=${segment.speaker}, start=${segment.start}, end=${segment.end}`)
+        }
+      })
+      
+      // Log summary if there are many segments
+      if (DEBUG_SPEAKER_UPDATES && apiSegments.length > 20) {
+        console.log(`API segments: ${apiSegments.length} total, ${apiSegments.filter(s => s.speaker && s.speaker !== "Unknown").length} with speakers`)
+      }
+
+      if (DEBUG_SPEAKER_UPDATES) {
+        console.log("API segments map size:", apiSegmentsMap.size)
+        
+        // Only log keys if there are few segments (for debugging)
+        if (apiSegmentsMap.size <= 20) {
+          console.log("API segments map keys:", Array.from(apiSegmentsMap.keys()))
+        } else {
+          console.log("API segments map keys: [too many to display, size:", apiSegmentsMap.size, "]")
+        }
+
+        // Log current segments for comparison (limited)
+        console.log("Current segments count:", updatedSegments.length)
+        if (updatedSegments.length <= 20) {
+          console.log("Current segments:")
+          updatedSegments.forEach((segment, index) => {
+            if (segment.start !== undefined) {
+              const key = segment.start.toFixed(3)
+              console.log(`Current segment ${index}: key=${key}, speaker=${segment.speaker}, start=${segment.start}`)
+            } else {
+              console.log(`Current segment ${index}: NO START TIME - segment:`, segment)
+            }
+          })
+        } else {
+          console.log("Current segments: [too many to display, count:", updatedSegments.length, "]")
+        }
+      }
+
+      // Update existing segments with speaker information
+      for (let index = 0; index < updatedSegments.length; index++) {
+        const segment = updatedSegments[index]
+        
+        if (segment.start === undefined) {
+          console.log(`Skipping segment ${index} - no start time:`, segment)
+          continue
+        }
+        
+        // Try to find API segment by start or end time
+        let apiSegment: TranscriptionSegment | undefined
+        let matchType = ""
+        
+        if (segment.start !== undefined) {
+          const startKey = `start:${segment.start.toFixed(3)}`
+          apiSegment = apiSegmentsMap.get(startKey)
+          if (apiSegment) matchType = "start"
+        }
+        
+        if (!apiSegment && segment.end !== undefined) {
+          const endKey = `end:${segment.end.toFixed(3)}`
+          apiSegment = apiSegmentsMap.get(endKey)
+          if (apiSegment) matchType = "end"
+        }
+        
+        // Only log detailed info if there are few segments or if there's an interesting case
+        if (DEBUG_SPEAKER_UPDATES && (updatedSegments.length <= 20 || apiSegment || (!segment.speaker || segment.speaker === "Unknown"))) {
+          console.log(`Checking segment ${index}/${updatedSegments.length} - start:${segment.start?.toFixed(3)}, end:${segment.end?.toFixed(3)}:`, {
+            currentSpeaker: segment.speaker,
+            apiSpeaker: apiSegment?.speaker,
+            hasApiSegment: !!apiSegment,
+            matchType: matchType,
+            shouldUpdate: apiSegment && apiSegment.speaker && (!segment.speaker || segment.speaker === "Unknown")
+          })
+        }
+        
+        if (apiSegment && apiSegment.speaker && (!segment.speaker || segment.speaker === "Unknown")) {
+          // Only update if segment doesn't already have a speaker or has "Unknown"
+          console.log(`Updating segment by ${matchType} match with speaker: ${apiSegment.speaker} (was: ${segment.speaker})`)
+          updatedSegments[index] = {
+            ...segment,
+            speaker: apiSegment.speaker,
+            // Also update timestamp if it's missing or very old
+            timestamp: segment.timestamp || apiSegment.timestamp || new Date().toISOString()
+          }
+          hasUpdates = true
+          updateCount++
+        } else if (apiSegment && apiSegment.speaker) {
+          console.log(`Skipping segment - already has speaker: ${segment.speaker}`)
+        } else if (!apiSegment) {
+          console.log(`No API segment found for start:${segment.start?.toFixed(3)} or end:${segment.end?.toFixed(3)}`)
+          
+          // Try to find by approximate match (within 0.1 seconds) by start OR end
+          const approximateMatch = apiSegments.find(apiSeg => {
+            // Check start time match
+            if (apiSeg.start !== undefined && segment.start !== undefined &&
+                Math.abs(apiSeg.start - segment.start) < 0.1) {
+              return true
+            }
+            // Check end time match
+            if (apiSeg.end !== undefined && segment.end !== undefined &&
+                Math.abs(apiSeg.end - segment.end) < 0.1) {
+              return true
+            }
+            return false
+          })
+          
+          if (approximateMatch && approximateMatch.speaker && (!segment.speaker || segment.speaker === "Unknown")) {
+            console.log(`Found approximate match: ${approximateMatch.start} -> ${approximateMatch.speaker}`)
+            updatedSegments[index] = {
+              ...segment,
+              speaker: approximateMatch.speaker,
+              // Also update timestamp if it's missing
+              timestamp: segment.timestamp || approximateMatch.timestamp || new Date().toISOString()
+            }
+            hasUpdates = true
+            updateCount++
+          } else {
+            // Check if this segment should be removed (old segment without speaker)
+            const segmentAge = Date.now() - new Date(segment.timestamp).getTime()
+            const isOldSegment = segmentAge > 10000 // 10 seconds
+            const hasNoSpeaker = !segment.speaker || segment.speaker === "Unknown"
+            
+            if (isOldSegment && hasNoSpeaker) {
+              console.log(`Removing old segment - age: ${Math.round(segmentAge/1000)}s, speaker: ${segment.speaker}`)
+              updatedSegments.splice(index, 1)
+              hasUpdates = true
+              removedCount++
+              // Decrement index since we removed an element
+              index--
+            }
+          }
+        }
+      }
+
+      console.log(`updateSegmentsWithSpeakers - updated ${updateCount} segments, removed ${removedCount} old segments`)
+      return hasUpdates ? updatedSegments : prevSegments
+    })
+  }
+
+  // Function to poll meeting details for speaker information
+  const pollMeetingDetails = async () => {
+    if (!meetingId || meetingStatus === "completed") {
+      console.log("Skipping pollMeetingDetails - meetingId:", meetingId, "status:", meetingStatus)
+      return
+    }
+
+    console.log("Polling meeting details for speaker information...")
+    try {
+      const data = await getTranscription(meetingId)
+      console.log("Polling response - segments count:", data.segments.length)
+      
+      // Log segments with speakers for debugging
+      const segmentsWithSpeakers = data.segments.filter(s => s.speaker && s.speaker !== "Unknown")
+      console.log("Segments with speakers:", segmentsWithSpeakers.length)
+      
+      // Update segments with speaker information
+      updateSegmentsWithSpeakers(data.segments)
+      
+      // Update meeting status if it changed
+      if (data.status !== meetingStatus) {
+        console.log("Meeting status changed:", meetingStatus, "->", data.status)
+        setMeetingStatus(data.status)
+        // Notify sidebar about updated meeting status
+        try {
+          window.dispatchEvent(new CustomEvent('vexa:meeting-updated', { detail: { meetingId, status: data.status } }))
+        } catch {}
+      }
+    } catch (err) {
+      console.error("Error polling meeting details:", err)
+      // Don't show error to user, just log it
+    }
+  }
 
   // Function to poll once for initial data on page load
   const pollOnceForInitialData = async () => {
@@ -356,28 +599,75 @@ export function TranscriptionDisplay({
     }
   }, [shouldDisplay, meetingId, isLive])
 
+  // Start/stop periodic polling for meeting details (speaker information)
+  useEffect(() => {
+    // Clear any existing interval
+    if (detailsPollingInterval.current) {
+      clearInterval(detailsPollingInterval.current)
+      detailsPollingInterval.current = null
+    }
+
+    // Only start polling for active meetings (including null status for initial load)
+    if (shouldDisplay && isLive && meetingStatus !== "completed") {
+      console.log("Starting periodic polling for meeting details (speaker info) - meetingId:", meetingId, "status:", meetingStatus)
+      
+      // Start polling every 5 seconds
+      detailsPollingInterval.current = setInterval(() => {
+        pollMeetingDetails()
+      }, 10000)
+      
+      // Also poll immediately
+      pollMeetingDetails()
+    } else {
+      console.log("Not starting polling - shouldDisplay:", shouldDisplay, "isLive:", isLive, "meetingStatus:", meetingStatus)
+    }
+
+    // Cleanup on unmount or dependency change
+    return () => {
+      if (detailsPollingInterval.current) {
+        clearInterval(detailsPollingInterval.current)
+        detailsPollingInterval.current = null
+      }
+    }
+  }, [shouldDisplay, isLive, meetingStatus, meetingId])
+
   // Handle WebSocket transcript updates
   useEffect(() => {
     const wsService = getWebSocketService()
 
     wsService.setOnTranscription((event: any) => {
+      console.log("WebSocket transcription event received:", event.segments?.length || 0, "segments")
+      
       const incomingSegments = (event.segments || []).map((segment: any) => {
         const startNum = typeof segment.start === 'string' ? parseFloat(segment.start) : segment.start || 0
         const endNum = typeof segment.end === 'string' ? parseFloat(segment.end) : segment.end || 0
         const id = `${startNum.toFixed(3)}`
-        const timestamp = segment.absolute_start_time
-          ? segment.absolute_start_time
-          : new Date((segment.start || 0) * 1000).toISOString()
-        return {
+        // Use current time if no timestamp is provided (real-time appearance)
+        const timestamp = segment.absolute_start_time || segment.timestamp || new Date().toISOString()
+        const processedSegment = {
           id,
           text: segment.text || "",
           timestamp,
           speaker: segment.speaker || "Unknown",
           completed: segment.completed !== undefined ? !!segment.completed : true,
+          start: startNum,
+          end: endNum,
           // carry numeric start for potential future ordering logic
           // @ts-ignore
           numericStart: startNum,
         }
+        
+        // Log processed segment for debugging
+        console.log(`WebSocket processed segment ${id}:`, {
+          originalStart: segment.start,
+          processedStart: startNum,
+          speaker: processedSegment.speaker,
+          hasStart: processedSegment.start !== undefined,
+          timestamp: processedSegment.timestamp,
+          timestampSource: segment.absolute_start_time ? 'absolute_start_time' : segment.timestamp ? 'timestamp' : 'current_time'
+        })
+        
+        return processedSegment
       })
 
       const changedIds = new Set<string>()
@@ -385,21 +675,46 @@ export function TranscriptionDisplay({
       setSegments((prev) => {
         // Preserve existing order; replace in place; append truly new at the end
         const next = [...prev]
-        const indexById = new Map<string, number>()
-        next.forEach((s, idx) => indexById.set(s.id, idx))
+        
+        // Create maps for finding existing segments by start and end time
+        const indexByStart = new Map<string, number>()
+        const indexByEnd = new Map<string, number>()
+        next.forEach((s, idx) => {
+          if (s.start !== undefined) {
+            indexByStart.set(s.start.toFixed(3), idx)
+          }
+          if (s.end !== undefined) {
+            indexByEnd.set(s.end.toFixed(3), idx)
+          }
+        })
 
         for (const seg of incomingSegments) {
-          const idx = indexById.get(seg.id)
+          // Try to find existing segment by start or end time
+          let idx: number | undefined
+          let matchType = ""
+          
+          if (seg.start !== undefined) {
+            idx = indexByStart.get(seg.start.toFixed(3))
+            if (idx !== undefined) matchType = "start"
+          }
+          
+          if (idx === undefined && seg.end !== undefined) {
+            idx = indexByEnd.get(seg.end.toFixed(3))
+            if (idx !== undefined) matchType = "end"
+          }
+          
           if (idx !== undefined) {
             const existing = next[idx] as any
             // Update text and completed; treat missing completed as true
             const incomingCompleted = seg.completed !== undefined ? !!seg.completed : true
             if (existing.text !== seg.text || existing.completed !== incomingCompleted) {
+              console.log(`WebSocket updating segment by ${matchType} match: ${seg.text}`)
               next[idx] = { ...existing, text: seg.text, completed: incomingCompleted }
               changedIds.add(seg.id)
             }
           } else {
             // New segment appended with all incoming fields
+            console.log(`WebSocket adding new segment: ${seg.text}`)
             next.push(seg as any)
             changedIds.add(seg.id)
           }
@@ -700,7 +1015,7 @@ export function TranscriptionDisplay({
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         {segment.speaker && (
-                          <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${getSpeakerColor(segment.speaker)}`}>
                             {segment.speaker}
                           </span>
                         )}
