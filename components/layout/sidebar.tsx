@@ -56,11 +56,11 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
       // Filter out meetings with "error" status
       const filteredMeetings = fetchedMeetings.filter(meeting => meeting.status !== "error")
       
-      // Sort meetings by endTime if available else startTime (most recent first)
+      // Sort meetings by endTime if available else startTime else created_at (most recent first)
       const sortedMeetings = filteredMeetings
         .sort((a, b) => {
-          const aTime = (a.endTime || a.startTime) ? new Date(a.endTime || a.startTime as string).getTime() : 0
-          const bTime = (b.endTime || b.startTime) ? new Date(b.endTime || b.startTime as string).getTime() : 0
+          const aTime = (a.endTime || a.startTime || a.created_at) ? new Date(a.endTime || a.startTime || a.created_at as string).getTime() : 0
+          const bTime = (b.endTime || b.startTime || b.created_at) ? new Date(b.endTime || b.startTime || b.created_at as string).getTime() : 0
           return bTime - aTime
         })
 
@@ -362,7 +362,7 @@ export function Sidebar({ onNewMeeting, onSelectMeeting, selectedMeetingId }: Si
                           {meeting.name || meeting.title || `Meeting ${meeting.nativeMeetingId || ""}`}
                         </div>
                         <div className="flex items-center space-x-2 text-xs text-muted-foreground">
-                          <span>{formatDate(meeting.endTime || meeting.startTime)}</span>
+                          <span>{formatDate(meeting.endTime || meeting.startTime || meeting.created_at)}</span>
                           {meeting.participants && meeting.participants.length > 0 && (
                             <>
                               <span>•</span>

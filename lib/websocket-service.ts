@@ -471,10 +471,10 @@ export function convertWebSocketSegment(segment: any, meetingId: string): any {
   if (segment.absolute_start_time) {
     timestamp = segment.absolute_start_time;
     console.log("🔄 [WEBSOCKET SERVICE] Using absolute_start_time:", timestamp);
-  } else if (segment.updated_at) {
+  } else if (segment.created_at) {
     // Keep as fallback timestamp for UI if absolute is missing, but mark as non-absolute
-    timestamp = segment.updated_at;
-    console.log("🔄 [WEBSOCKET SERVICE] Using updated_at timestamp (no absolute_start_time):", timestamp);
+    timestamp = segment.created_at;
+    console.log("🔄 [WEBSOCKET SERVICE] Using created_at timestamp (no absolute_start_time):", timestamp);
   }
   
   // Generate ID from session_uid and start time if available
@@ -496,7 +496,7 @@ export function convertWebSocketSegment(segment: any, meetingId: string): any {
   // Preserve absolute fields when present for strict UI merge/sort
   if (segment.absolute_start_time) convertedSegment.absolute_start_time = segment.absolute_start_time
   if (segment.absolute_end_time) convertedSegment.absolute_end_time = segment.absolute_end_time
-  if (segment.updated_at) convertedSegment.updated_at = segment.updated_at
+  if (segment.created_at) convertedSegment.created_at = segment.created_at
   
   console.log("🔄 [WEBSOCKET SERVICE] Converted segment:", convertedSegment);
   console.log("🔄 [WEBSOCKET SERVICE] Text length:", text.length);

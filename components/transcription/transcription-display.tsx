@@ -367,7 +367,7 @@ export function TranscriptionDisplay({
     return chunks
   }, [])
 
-  // Merge utility: key by absolute_start_time; prefer newer updated_at
+  // Merge utility: key by absolute_start_time; prefer newer created_at
   const mergeByAbsoluteUtc = useCallback((prev: TranscriptionSegment[], incoming: TranscriptionSegment[]): TranscriptionSegment[] => {
     const map = new Map<string, TranscriptionSegment>()
 
@@ -387,9 +387,17 @@ export function TranscriptionDisplay({
       if (key.startsWith('no-utc-')) continue
       const existing = map.get(key) as any
       const candidate: any = { ...s, text: cleanText((s as any).text) }
-      if (existing && existing.updated_at && candidate.updated_at) {
-        if (candidate.updated_at < existing.updated_at) {
-          continue
+      // Use updated_at (WebSocket) or created_at (REST API) for version tracking
+      // WebSocket segments have updated_at, REST API segments have created_at
+      if (existing && candidate) {
+        const existingTime = existing.updated_at || existing.created_at
+        const candidateTime = candidate.updated_at || candidate.created_at
+        if (existingTime && candidateTime) {
+          const existingMs = new Date(existingTime).getTime()
+          const candidateMs = new Date(candidateTime).getTime()
+          if (candidateMs < existingMs) {
+            continue  // Keep existing (newer)
+          }
         }
       }
       map.set(key, candidate)
@@ -535,7 +543,7 @@ export function TranscriptionDisplay({
       console.log("🔄 [POLLING] Stopped polling - WebSocket is receiving data");
     }
     
-    // Merge by absolute UTC key with updated_at preference
+    // Merge by absolute UTC key with created_at preference
     setAllSegments(prev => mergeByAbsoluteUtc(prev, validSegments))
     
     // Track which segments are mutable and highlight them
