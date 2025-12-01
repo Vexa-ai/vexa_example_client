@@ -35,7 +35,7 @@ Check out our demo video:
 1. Clone the repository:
    ```bash
    git clone https://github.com/Vexa-ai/vexa_example_client
-   cd vexa-client
+   cd vexa_example_client
    ```
 
 2. Install dependencies:
